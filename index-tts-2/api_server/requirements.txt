@@ -1,0 +1,9 @@
+# IndexTTS API Server - 新增依赖
+# 注意：PyTorch、torchaudio、transformers 等 AI 推理依赖已在 index-tts-2 现有环境中安装，无需重复安装
+
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-multipart>=0.0.6
+pyyaml>=6.0

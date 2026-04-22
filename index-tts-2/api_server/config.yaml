@@ -1,0 +1,48 @@
+# IndexTTS API Server 配置文件
+
+# 服务配置
+server:
+  host: "0.0.0.0"
+  port: 7860
+  reload: false  # 生产环境关闭热重载
+
+# 模型配置
+model:
+  cfg_path: "checkpoints/config.yaml"
+  model_dir: "checkpoints"
+  is_fp16: true  # 混合精度推理
+  device: null   # null 表示自动检测（优先 cuda:0 → mps → cpu）
+  use_cuda_kernel: null  # null 表示 cuda 设备自动启用
+
+# 推理默认参数
+inference:
+  mode: "fast"  # fast | standard
+  temperature: 1.0
+  top_p: 0.8
+  top_k: 30
+  num_beams: 3
+
+# 任务队列配置
+queue:
+  max_size: 10  # 队列最大长度，超出返回 503
+  task_timeout_sec: 600  # 单任务最大等待+执行时间（秒）
+
+# 音色配置
+voice:
+  voices_dir: "voices"  # 预设音色目录
+  temp_dir: "tmp"  # 临时音色文件目录
+
+# 音频输出配置
+audio:
+  output_dir: "outputs"  # 合成音频输出目录
+  retention_hours: 24  # 音频文件保留时间（小时），0 表示不清理
+  sample_rate: 24000  # 输出采样率
+
+# 情绪映射配置
+emotion:
+  mapping_file: "emotion_mapping.yaml"  # 情绪标签→情绪参考音频映射文件，相对于 index-tts-2 目录
+
+# 日志配置
+logging:
+  level: "INFO"  # DEBUG | INFO | WARNING | ERROR
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

@@ -1,0 +1,80 @@
+# Dependencies
+frontend/node_modules/
+backend/venv/
+backend/__pycache__/
+__pycache__/
+.claude/
+.codebuddy/
+.trae/
+core/test/
+docs/
+logs/
+claude.md
+
+# Build outputs
+frontend/dist/
+build/
+dist/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Data files
+uploads/
+output/
+temp/
+data/
+*.sqlite3
+
+# Trae
+.trae/
+
+# Claude
+.claude/settings.local.json
+.gstack/
+.trae/
+temp/
+tmp/
+py310/
+tf_download/
+heygem-win-50-onnx/pretrain_models/
+heygem-win-50-onnx/__pycache__/
+heygem-win-50-onnx/mel/
+heygem-win-50-onnx/model_lib/
+heygem-win-50-onnx/face_lib/
+heygem-win-50-onnx/landmark2face_wy/checkpoints/
+index-tts-2/checkpoints/
+index-tts-2/indextts/
+index-tts-2/outputs/
+*.mp4
+*.wav
+*.mp3
+*.aac
+*.mov
+*.onnx
+*.pth
+*.pt
+*.ckpt
+*.tar
+测试输出/
+shared_cache/
+specs/
+backend/tests/
+node-v24.15.0-win-x64/
+.gstack/

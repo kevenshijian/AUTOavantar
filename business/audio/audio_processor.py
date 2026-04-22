@@ -1,0 +1,1568 @@
+"""
+音频处理模块
+实现 TTS 合成、音频降噪、音频处理功能
+"""
+
+import logging
+import os
+import time
+import uuid
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
+
+import requests
+
+from core.api_clients import IndexTTSClient
+from core.models.task import ScriptSegment, Task, TaskConfig
+
+logger = logging.getLogger(__name__)
+
+# IndexTTS 超时自动重启配置
+INDEX_TTS_TIMEOUT = 120  # 秒，IndexTTS 处理时间一般不超过 120 秒
+MAX_AUTO_RESTART = 3  # 同一任务内同一服务最多自动重启 3 次
+
+
+def create_audio_speed_processor(output_dir: str = "temp/audio"):
+    """导入音频语速处理器"""
+    try:
+        from business.audio.audio_speed_processor import AudioSpeedProcessor
+        return AudioSpeedProcessor(output_dir)
+    except ImportError:
+        logger.warning("无法导入 AudioSpeedProcessor，语速调节功能将不可用")
+        return None
+
+
+@dataclass
+class AudioSegmentResult:
+    """音频段落结果"""
+    segment_id: str
+    text: str
+    audio_path: Optional[str]
+    duration: float
+    status: str  # success, failed
+    error_message: Optional[str] = None
+    speaker: Optional[str] = None  # 说话人标识（left/right，双人模式）
+    tone: Optional[str] = None  # 标签/情绪标识（用于双人模式按标签分组对齐）
+
+
+class AudioProcessor:
+    """音频处理器 - 封装 IndexTTS、GTCRN 降噪和音频处理功能"""
+
+    def __init__(
+        self,
+        tts_host: str = "http://localhost:7860",
+        output_dir: str = "temp/audio",
+        enable_denoise: bool = True,
+        denoise_strength: float = 0.7
+    ):
+        """
+        初始化音频处理器
+
+        Args:
+            tts_host: IndexTTS 服务地址
+            output_dir: 音频输出目录
+            enable_denoise: 是否启用 GTCRN 降噪，默认 True
+            denoise_strength: 降噪强度 (0.0-1.0)，默认 0.7
+        """
+        self.tts_host = tts_host
+        self.output_dir = output_dir
+        self.enable_denoise = enable_denoise
+        self.denoise_strength = denoise_strength
+        self.tts_client: Optional[IndexTTSClient] = None
+        self.denoiser = None
+        self.speed_processor = None
+
+        # 创建输出目录
+        os.makedirs(output_dir, exist_ok=True)
+
+        self._init_tts_client()
+        self._init_denoiser()
+        self._init_speed_processor()
+
+    def _init_speed_processor(self):
+        """初始化音频语速处理器"""
+        try:
+            self.speed_processor = create_audio_speed_processor(self.output_dir)
+            if self.speed_processor:
+                logger.info("音频语速处理器初始化成功")
+        except Exception as e:
+            logger.warning(f"音频语速处理器初始化失败：{e}")
+            self.speed_processor = None
+
+    def _init_tts_client(self):
+        """初始化 TTS 客户端"""
+        try:
+            # 获取项目根目录
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            # IndexTTS 输出目录（使用相对路径）
+            indextts_output_dir = os.path.join(project_root, "index-tts-2", "outputs")
+            self.tts_client = IndexTTSClient(
+                host=self.tts_host,
+                output_dir=indextts_output_dir
+            )
+            logger.info(f"IndexTTS 客户端初始化成功：{self.tts_host}, 输出目录: {indextts_output_dir}")
+        except Exception as e:
+            logger.error(f"IndexTTS 客户端初始化失败：{e}")
+
+    def _init_denoiser(self):
+        """初始化 GTCRN 降噪器"""
+        if self.enable_denoise:
+            try:
+                from business.audio.gtcrn_denoiser import GTCDenoiser
+                self.denoiser = GTCDenoiser(
+                    model_path="tools/stream/onnx_models/gtcrn_simple.onnx",
+                    denoise_strength=self.denoise_strength
+                )
+                logger.info("GTCRN 降噪器初始化成功")
+            except Exception as e:
+                logger.warning(f"GTCRN 降噪器初始化失败：{e}，将不使用降噪功能")
+                self.enable_denoise = False
+                self.denoiser = None
+
+    def denoise(self, audio_path: str) -> Dict[str, Any]:
+        """
+        音频降噪处理
+
+        Args:
+            audio_path: 音频文件路径
+
+        Returns:
+            降噪后的音频文件路径
+        """
+        try:
+            logger.info(f"开始音频降噪: {audio_path}")
+            
+            if not self.denoiser:
+                logger.warning("降噪器未初始化，跳过降噪处理")
+                return {"output_path": audio_path}
+
+            # 构建完整的音频文件路径
+            from config.settings import settings
+            full_audio_path = os.path.join(settings.UPLOAD_DIR, audio_path)
+            
+            if not os.path.exists(full_audio_path):
+                raise FileNotFoundError(f"音频文件不存在：{audio_path}")
+
+            # 调用降噪器进行处理
+            output_path = self.denoiser.denoise(full_audio_path)
+            logger.info(f"音频降噪完成: {output_path}")
+            
+            # 替换原音频文件
+            import shutil
+            shutil.move(output_path, full_audio_path)
+            logger.info(f"已用增强后的音频替换原音频文件: {full_audio_path}")
+            
+            return {"output_path": audio_path, "message": "音频降噪完成并已替换原文件"}
+        except Exception as e:
+            logger.error(f"音频降噪失败: {e}")
+            raise
+
+    def _extract_audio_from_video(self, video_path: str) -> Optional[str]:
+        """
+        从视频中提取音频
+
+        Args:
+            video_path: 视频文件路径
+
+        Returns:
+            提取的音频文件路径，失败则返回 None
+        """
+        import subprocess
+        import os
+        
+        # 生成输出音频路径
+        audio_filename = os.path.splitext(os.path.basename(video_path))[0] + ".wav"
+        audio_path = os.path.join(self.output_dir, audio_filename)
+        
+        # 使用 ffmpeg 提取音频
+        cmd = [
+            "ffmpeg",
+            "-i", video_path,
+            "-y",
+            "-vn",  # 不包含视频
+            "-acodec", "pcm_s16le",  # 音频编码
+            "-ar", "16000",  # 采样率
+            "-ac", "1",  # 声道数
+            audio_path
+        ]
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                logger.info(f"从视频中提取音频成功：{audio_path}")
+                return audio_path
+            else:
+                logger.error(f"从视频中提取音频失败：{result.stderr}")
+                return None
+        except Exception as e:
+            logger.error(f"从视频中提取音频时发生异常：{e}")
+            return None
+
+    def _generate_subtitle(self, task: Task) -> Optional[str]:
+        """
+        生成字幕文件
+
+        Args:
+            task: 任务对象
+
+        Returns:
+            生成的字幕文件路径，失败则返回 None
+        """
+        import os
+        
+        # 生成输出字幕路径
+        subtitle_filename = f"{task.task_id}.srt"
+        subtitle_path = os.path.join(self.output_dir, subtitle_filename)
+        
+        try:
+            with open(subtitle_path, 'w', encoding='utf-8') as f:
+                start_time = 0.0
+                for i, segment in enumerate(task.segments):
+                    if segment.audio_path and segment.duration:
+                        # 格式化为 SRT 时间格式
+                        def format_time(seconds):
+                            h = int(seconds // 3600)
+                            m = int((seconds % 3600) // 60)
+                            s = int(seconds % 60)
+                            ms = int((seconds % 1) * 1000)
+                            return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+                        
+                        end_time = start_time + segment.duration
+                        
+                        # 写入 SRT 格式
+                        f.write(f"{i + 1}\n")
+                        f.write(f"{format_time(start_time)} --> {format_time(end_time)}\n")
+                        f.write(f"{segment.text}\n")
+                        f.write("\n")
+                        
+                        start_time = end_time
+            
+            logger.info(f"字幕生成成功：{subtitle_path}")
+            return subtitle_path
+        except Exception as e:
+            logger.error(f"生成字幕时发生异常：{e}")
+            return None
+
+    def _synthesize_with_auto_restart(
+        self,
+        segment: ScriptSegment,
+        prompt_audio: str,
+        speed: float = 1.0,
+        emotion_label: Optional[str] = None,
+        emotion_weight: float = 0.4,
+        task_id: Optional[str] = None,
+        cancel_callback: Optional[callable] = None
+    ) -> Dict[str, Any]:
+        """
+        带自动重启的 TTS 合成
+        
+        捕获 requests.Timeout 后自动重启 IndexTTS 服务并重试，
+        超过 MAX_AUTO_RESTART 次后抛出异常。
+        
+        Args:
+            segment: 文案段落
+            prompt_audio: 音色参考音频路径
+            speed: 语速
+            emotion_label: 情绪标签
+            emotion_weight: 情感强度
+            task_id: 任务ID
+            cancel_callback: 取消回调函数
+            
+        Returns:
+            TTS 合成结果字典
+            
+        Raises:
+            Exception: 超过最大重启次数仍失败
+        """
+        restart_count = 0
+        
+        while True:
+            # 检查是否取消
+            if cancel_callback and cancel_callback():
+                raise Exception("任务被取消")
+            
+            try:
+                # 准备调用 TTS 的参数
+                tts_kwargs = {
+                    "prompt": prompt_audio,
+                    "text": segment.text,
+                    "speed": speed,
+                    "timeout": INDEX_TTS_TIMEOUT,  # 使用 60 秒超时
+                }
+                
+                # 传递情绪参数
+                if emotion_label:
+                    tts_kwargs["emotion"] = emotion_label
+                    tts_kwargs["intensity"] = emotion_weight
+                
+                # 调用 TTS
+                tts_task_id, output = self.tts_client.synthesize(**tts_kwargs)
+                
+                # 成功，返回结果
+                return {"task_id": tts_task_id, "output": output}
+                
+            except requests.Timeout:
+                restart_count += 1
+                if restart_count > MAX_AUTO_RESTART:
+                    raise Exception(f"IndexTTS 多次重启仍无响应 (已重启 {restart_count - 1} 次)")
+                
+                logger.warning(
+                    f"IndexTTS 请求超时 ({INDEX_TTS_TIMEOUT}s)，自动重启 "
+                    f"({restart_count}/{MAX_AUTO_RESTART})"
+                )
+                
+                # 获取 ServiceManager 并重启 IndexTTS
+                from core.service_manager import get_service_manager
+                sm = get_service_manager()
+                if sm:
+                    try:
+                        sm.restart_service("indextts")
+                        logger.info("IndexTTS 服务重启完成，继续任务")
+                    except Exception as e:
+                        logger.error(f"IndexTTS 服务重启失败: {e}")
+                        raise
+                else:
+                    raise Exception("ServiceManager 未初始化，无法自动重启")
+                    
+            except Exception as e:
+                # 其他异常，直接抛出
+                raise
+
+    def synthesize_segment(
+        self,
+        segment: ScriptSegment,
+        prompt_audio: str,
+        speed: float = 1.0,
+        emo_weight: Optional[float] = None,
+        speaker: Optional[str] = None,
+        task_id: Optional[str] = None
+    ) -> AudioSegmentResult:
+        """
+        合成单个段落
+
+        Args:
+            segment: 文案段落
+            prompt_audio: 音色参考音频
+            speed: 语速
+            emo_weight: 情感权重（覆盖 segment 中的值）
+            speaker: 说话人标识（left/right，双人模式）
+            task_id: 任务ID，用于文件命名前缀
+
+        Returns:
+            音频结果
+        """
+        # 确定情感权重（从配置中获取，或使用传入值）
+        emotion_weight = emo_weight or getattr(segment, 'emotion_weight', 0.4)
+        # API 支持 0.0~1.6 的强度范围
+        emotion_weight = min(max(emotion_weight, 0.0), 1.6)
+        
+        # 获取情绪标签（tone 字段），直接传递给 index-tts 处理
+        emotion_label = getattr(segment, 'tone', None)
+        
+        try:
+            # 记录情绪信息
+            if emotion_label:
+                logger.info(f"段落 {segment.segment_id} 标签: {emotion_label}, 强度: {emotion_weight}")
+            else:
+                logger.info(f"段落 {segment.segment_id} 无标签，使用默认情绪")
+            
+            # 使用带自动重启的 TTS 合成
+            result = self._synthesize_with_auto_restart(
+                segment=segment,
+                prompt_audio=prompt_audio,
+                speed=speed,
+                emotion_label=emotion_label,
+                emotion_weight=emotion_weight,
+                task_id=task_id
+            )
+
+            # 合成成功，获取生成的音频
+            audio_path = None
+            if isinstance(result, dict):
+                output = result.get("output")
+                if isinstance(output, dict) and output.get("status") == "success":
+                    audio_path = output.get("audio_path")
+            
+            if audio_path:
+                # 生成文件名：使用 task_id 前缀，格式为 {task_id}_audio_{segment_id}.wav
+                if task_id:
+                    audio_filename = f"{task_id}_audio_{segment.segment_id}.wav"
+                else:
+                    audio_filename = f"{segment.segment_id}.wav"
+                
+                output_path = self._save_audio(
+                    audio_path,
+                    audio_filename
+                )
+
+                # 获取音频时长
+                duration = self._get_audio_duration(output_path)
+
+                segment.audio_path = output_path
+                segment.duration = duration
+
+                return AudioSegmentResult(
+                    segment_id=segment.segment_id,
+                    text=segment.text,
+                    audio_path=output_path,
+                    duration=duration,
+                    status="success",
+                    speaker=speaker,
+                    tone=getattr(segment, 'tone', None)
+                )
+
+            return AudioSegmentResult(
+                segment_id=segment.segment_id,
+                text=segment.text,
+                audio_path=None,
+                duration=0.0,
+                status="failed",
+                error_message="未获取到生成的音频文件",
+                speaker=speaker,
+                tone=getattr(segment, 'tone', None)
+            )
+
+        except Exception as e:
+            logger.error(f"段落 {segment.segment_id} 合成失败: {e}")
+            return AudioSegmentResult(
+                segment_id=segment.segment_id,
+                text=segment.text,
+                audio_path=None,
+                duration=0.0,
+                status="failed",
+                error_message=str(e),
+                speaker=speaker,
+                tone=getattr(segment, 'tone', None)
+            )
+
+    def synthesize_all(
+        self,
+        task: Task,
+        config: TaskConfig,
+        cancel_callback: Optional[callable] = None
+    ) -> List[AudioSegmentResult]:
+        """
+        合成任务所有段落
+
+        Args:
+            task: 任务
+            config: 配置
+
+        Returns:
+            音频结果列表
+        """
+        results = []
+
+        # 检查是否取消
+        if cancel_callback and cancel_callback():
+            logger.info("任务被取消，停止音频合成")
+            for segment in task.segments:
+                results.append(AudioSegmentResult(
+                    segment_id=segment.segment_id,
+                    text=segment.text,
+                    audio_path=None,
+                    duration=0.0,
+                    status="failed",
+                    error_message="任务被取消"
+                ))
+            return results
+
+        # 检查任务和配置
+        if not task:
+            logger.error("任务对象为空")
+            return results
+        
+        if not task.segments:
+            logger.warning("任务没有段落")
+            return results
+
+        # 检查 TTS 客户端是否初始化
+        if not self.tts_client:
+            logger.error("TTS 客户端未初始化")
+            for segment in task.segments:
+                results.append(AudioSegmentResult(
+                    segment_id=segment.segment_id,
+                    text=segment.text,
+                    audio_path=None,
+                    duration=0.0,
+                    status="failed",
+                    error_message="TTS 客户端未初始化"
+                ))
+            return results
+
+        # 处理双人模式
+        logger.info(f"开始音频合成，双人模式: {config.enable_double_mode}")
+        logger.info(f"task.left_prompt_audio_path: {task.left_prompt_audio_path}")
+        logger.info(f"task.right_prompt_audio_path: {task.right_prompt_audio_path}")
+        logger.info(f"task.prompt_audio_path: {task.prompt_audio_path}")
+        
+        if config.enable_double_mode:
+            # 检查左右说话人的音频路径
+            left_prompt_audio = task.left_prompt_audio_path
+            right_prompt_audio = task.right_prompt_audio_path
+            
+            # 先规范化路径
+            if left_prompt_audio:
+                left_prompt_audio = os.path.normpath(left_prompt_audio.replace('\\', '/'))
+            if right_prompt_audio:
+                right_prompt_audio = os.path.normpath(right_prompt_audio.replace('\\', '/'))
+            
+            logger.info(f"规范化后 left_prompt_audio: {left_prompt_audio}")
+            logger.info(f"规范化后 right_prompt_audio: {right_prompt_audio}")
+            
+            # 检查文件是否存在
+            if left_prompt_audio:
+                logger.info(f"left_prompt_audio 是否存在: {os.path.exists(left_prompt_audio)}")
+            if right_prompt_audio:
+                logger.info(f"right_prompt_audio 是否存在: {os.path.exists(right_prompt_audio)}")
+            
+            if not left_prompt_audio or not right_prompt_audio:
+                logger.error("双人模式需要提供左右说话人的音频路径")
+                for segment in task.segments:
+                    results.append(AudioSegmentResult(
+                        segment_id=segment.segment_id,
+                        text=segment.text,
+                        audio_path=None,
+                        duration=0.0,
+                        status="failed",
+                        error_message="双人模式需要提供左右说话人的音频路径"
+                    ))
+                return results
+            
+            if not os.path.exists(left_prompt_audio):
+                logger.error(f"左边说话人音频文件不存在: {left_prompt_audio}")
+                for segment in task.segments:
+                    results.append(AudioSegmentResult(
+                        segment_id=segment.segment_id,
+                        text=segment.text,
+                        audio_path=None,
+                        duration=0.0,
+                        status="failed",
+                        error_message=f"左边说话人音频文件不存在: {left_prompt_audio}"
+                    ))
+                return results
+            
+            if not os.path.exists(right_prompt_audio):
+                logger.error(f"右边说话人音频文件不存在: {right_prompt_audio}")
+                for segment in task.segments:
+                    results.append(AudioSegmentResult(
+                        segment_id=segment.segment_id,
+                        text=segment.text,
+                        audio_path=None,
+                        duration=0.0,
+                        status="failed",
+                        error_message=f"右边说话人音频文件不存在: {right_prompt_audio}"
+                    ))
+                return results
+            
+            # 合成每个段落的音频
+            for i, segment in enumerate(task.segments):
+                if cancel_callback and cancel_callback():
+                    logger.info("任务被取消，停止双人模式音频合成")
+                    break
+                
+                if segment.audio_path and os.path.exists(segment.audio_path):
+                    logger.info(f"段落 {segment.segment_id} 音频已存在，跳过合成: {segment.audio_path}")
+                    duration = self._get_audio_duration(segment.audio_path)
+                    results.append(AudioSegmentResult(
+                        segment_id=segment.segment_id,
+                        text=segment.text,
+                        audio_path=segment.audio_path,
+                        duration=duration,
+                        status="success",
+                        speaker=segment.speaker,
+                        tone=getattr(segment, 'tone', None)
+                    ))
+                    continue
+                
+                max_retries = 3
+                success = False
+                
+                for attempt in range(max_retries):
+                    try:
+                        # 根据说话人选择对应的参考音频
+                        prompt_audio = left_prompt_audio if segment.speaker == "left" else right_prompt_audio
+                        
+                        logger.info(f"合成段落 {segment.segment_id} (说话人: {segment.speaker}, 尝试 {attempt + 1}/{max_retries})")
+                        # 根据说话人选择对应的语速
+                        segment_speed = config.tts_speed
+                        if config.enable_double_mode:
+                            if segment.speaker == "left" and config.left_tts_speed:
+                                segment_speed = config.left_tts_speed
+                            elif segment.speaker == "right" and config.right_tts_speed:
+                                segment_speed = config.right_tts_speed
+                        
+                        result = self.synthesize_segment(
+                            segment=segment,
+                            prompt_audio=prompt_audio,
+                            speed=segment_speed,
+                            emo_weight=config.tts_emo_weight,
+                            speaker=segment.speaker,
+                            task_id=task.task_id
+                        )
+                        
+                        if result.status == "success":
+                            results.append(result)
+                            success = True
+                            logger.info(f"段落 {segment.segment_id} 合成成功")
+                            break
+                        else:
+                            logger.warning(f"段落 {segment.segment_id} 合成失败: {result.error_message}")
+                            if attempt < max_retries - 1:
+                                logger.info(f"等待 2 秒后重试...")
+                                time.sleep(2)
+                    except Exception as e:
+                        logger.error(f"合成段落 {segment.segment_id} 时发生异常: {e}")
+                        if attempt < max_retries - 1:
+                            logger.info(f"等待 2 秒后重试...")
+                            time.sleep(2)
+                
+                if not success:
+                    logger.error(f"段落 {segment.segment_id} 在 {max_retries} 次尝试后仍失败")
+                    results.append(AudioSegmentResult(
+                        segment_id=segment.segment_id,
+                        text=segment.text,
+                        audio_path=None,
+                        duration=0.0,
+                        status="failed",
+                        error_message=f"在 {max_retries} 次尝试后仍失败"
+                    ))
+
+                # 保存中间产物
+                if len(results) > 0 and results[-1].status == "success":
+                    task.progress = (i + 1) / len(task.segments) * 50
+                    # 触发进度回调
+
+                time.sleep(0.5)  # 避免并发过高
+            
+            # 合并同一说话人的音频并添加静音
+            if results:
+                try:
+                    logger.info("合并同一说话人的音频...")
+                    self._merge_speaker_audios(task, results)
+                except Exception as e:
+                    logger.error(f"合并音频失败: {e}")
+        else:
+            # 单人模式
+            # 如果有参考音频且启用了降噪，先对参考音频降噪
+            prompt_audio = task.prompt_audio_path
+            if not prompt_audio:
+                logger.info("没有提供参考音频，尝试从开场视频中提取")
+                # 从开场视频中提取音频
+                video_path = task.opening_video or task.source_video_path
+                if video_path and os.path.exists(video_path):
+                    prompt_audio = self._extract_audio_from_video(video_path)
+                    if not prompt_audio:
+                        logger.error("从开场视频中提取音频失败")
+                        for segment in task.segments:
+                            results.append(AudioSegmentResult(
+                                segment_id=segment.segment_id,
+                                text=segment.text,
+                                audio_path=None,
+                                duration=0.0,
+                                status="failed",
+                                error_message="从开场视频中提取音频失败"
+                            ))
+                        return results
+                else:
+                    logger.error("没有提供参考音频，也没有可用的开场视频")
+                    for segment in task.segments:
+                        results.append(AudioSegmentResult(
+                            segment_id=segment.segment_id,
+                            text=segment.text,
+                            audio_path=None,
+                            duration=0.0,
+                            status="failed",
+                            error_message="没有提供参考音频，也没有可用的开场视频"
+                        ))
+                    return results
+            
+            if not os.path.exists(prompt_audio):
+                logger.error(f"参考音频文件不存在: {prompt_audio}")
+                for segment in task.segments:
+                    results.append(AudioSegmentResult(
+                        segment_id=segment.segment_id,
+                        text=segment.text,
+                        audio_path=None,
+                        duration=0.0,
+                        status="failed",
+                        error_message=f"参考音频文件不存在: {prompt_audio}"
+                    ))
+                return results
+
+            for i, segment in enumerate(task.segments):
+                if cancel_callback and cancel_callback():
+                    logger.info("任务被取消，停止单人模式音频合成")
+                    break
+                
+                if segment.audio_path and os.path.exists(segment.audio_path):
+                    logger.info(f"段落 {segment.segment_id} 音频已存在，跳过合成: {segment.audio_path}")
+                    duration = self._get_audio_duration(segment.audio_path)
+                    results.append(AudioSegmentResult(
+                        segment_id=segment.segment_id,
+                        text=segment.text,
+                        audio_path=segment.audio_path,
+                        duration=duration,
+                        status="success",
+                        tone=getattr(segment, 'tone', None)
+                    ))
+                    continue
+                
+                max_retries = 3
+                success = False
+                
+                for attempt in range(max_retries):
+                    try:
+                        logger.info(f"合成段落 {segment.segment_id} (尝试 {attempt + 1}/{max_retries})")
+                        result = self.synthesize_segment(
+                            segment=segment,
+                            prompt_audio=prompt_audio,
+                            speed=config.tts_speed,
+                            emo_weight=config.tts_emo_weight,
+                            task_id=task.task_id
+                        )
+                        
+                        if result.status == "success":
+                            results.append(result)
+                            success = True
+                            logger.info(f"段落 {segment.segment_id} 合成成功")
+                            break
+                        else:
+                            logger.warning(f"段落 {segment.segment_id} 合成失败: {result.error_message}")
+                            if attempt < max_retries - 1:
+                                logger.info(f"等待 2 秒后重试...")
+                                time.sleep(2)
+                    except Exception as e:
+                        logger.error(f"合成段落 {segment.segment_id} 时发生异常: {e}")
+                        if attempt < max_retries - 1:
+                            logger.info(f"等待 2 秒后重试...")
+                            time.sleep(2)
+                
+                if not success:
+                    logger.error(f"段落 {segment.segment_id} 在 {max_retries} 次尝试后仍失败")
+                    results.append(AudioSegmentResult(
+                        segment_id=segment.segment_id,
+                        text=segment.text,
+                        audio_path=None,
+                        duration=0.0,
+                        status="failed",
+                        error_message=f"在 {max_retries} 次尝试后仍失败"
+                    ))
+
+                # 保存中间产物
+                if len(results) > 0 and results[-1].status == "success":
+                    task.progress = (i + 1) / len(task.segments) * 50
+                    # 触发进度回调
+
+                time.sleep(0.5)  # 避免并发过高
+
+        return results
+
+    def _merge_speaker_audios(self, task: Task, results: List[AudioSegmentResult]):
+        """
+        合并同一说话人的音频并添加静音（按标签分组对齐）
+        
+        根据需求实现按标签分组的时长对齐逻辑：
+        - 每个标签下的左右说话人音频分别对齐
+        - 例如"开场"标签：左边11秒 + 右边9秒 → 各对齐为20秒
+        - 例如"开心"标签：左边8秒 + 右边7秒 → 各对齐为15秒
+        
+        最终将所有标签组的对齐后音频按顺序合并
+        
+        Args:
+            task: 任务
+            results: 音频结果列表
+        """
+        import os
+        import subprocess
+        from collections import defaultdict
+        
+        if not results:
+            logger.warning("没有音频结果需要合并")
+            return
+        
+        # 双人模式：检查是否已有 tone_audio_paths（从检查点恢复）
+        if hasattr(task, 'tone_audio_paths') and task.tone_audio_paths:
+            logger.info(f"双人模式：检测到已存在的 tone_audio_paths，跳过音频合并")
+            logger.info(f"已存在的标签: {list(task.tone_audio_paths.keys())}")
+            # 验证音频文件是否存在
+            for tone, paths in task.tone_audio_paths.items():
+                left_path = paths.get('left')
+                right_path = paths.get('right')
+                if left_path and os.path.exists(left_path):
+                    logger.info(f"标签 '{tone}' 左音频已存在: {left_path}")
+                if right_path and os.path.exists(right_path):
+                    logger.info(f"标签 '{tone}' 右音频已存在: {right_path}")
+            return
+        
+        try:
+            # 按标签分组，每个标签下再按说话人分组
+            tone_groups = defaultdict(lambda: {"left": [], "right": []})
+            
+            for result in results:
+                if result.status == "success" and result.audio_path:
+                    speaker = getattr(result, 'speaker', None)
+                    tone = getattr(result, 'tone', 'default')
+                    if speaker in ["left", "right"]:
+                        tone_groups[tone][speaker].append(result)
+            
+            logger.info(f"按标签分组完成，共 {len(tone_groups)} 个标签组")
+            
+            # 导入标签匹配器判断场景标签
+            from business.video.tag_matcher import get_tag_matcher
+            tag_matcher = get_tag_matcher()
+            
+            # 存储每个标签组的音频路径（按标签分组，用于双人模式视频合成）
+            tone_audio_paths = {}
+            
+            # 存储每个标签组对齐后的音频路径（用于最终合并）
+            left_aligned_segments = []
+            right_aligned_segments = []
+            
+            # 按原始顺序处理每个标签组
+            processed_tones = set()
+            for result in results:
+                if result.status == "success" and result.audio_path:
+                    tone = getattr(result, 'tone', 'default')
+                    if tone in processed_tones:
+                        continue
+                    processed_tones.add(tone)
+                    
+                    try:
+                        left_segments = tone_groups[tone]["left"]
+                        right_segments = tone_groups[tone]["right"]
+                        
+                        if not left_segments and not right_segments:
+                            continue
+                        
+                        # 计算该标签下每个说话人的总时长
+                        left_duration = sum(getattr(r, 'duration', 0.0) for r in left_segments)
+                        right_duration = sum(getattr(r, 'duration', 0.0) for r in right_segments)
+                        
+                        logger.info(f"标签 '{tone}': 左边 {left_duration:.2f}秒, 右边 {right_duration:.2f}秒")
+                        
+                        # 为该标签组创建对齐后的音频
+                        left_aligned_path = None
+                        right_aligned_path = None
+                        
+                        # 判断是否是场景标签
+                        is_scene_tag = tag_matcher.is_scene_tag(tone)
+                        
+                        if is_scene_tag:
+                            # 场景标签：不进行对齐，直接使用原始音频
+                            logger.info(f"标签 '{tone}' 是场景标签，跳过音频对齐")
+                            
+                            # 合并左边说话人音频
+                            if left_segments:
+                                left_merged_for_scene = os.path.join(self.output_dir, f"left_{tone}_{task.task_id}.wav")
+                                left_audio_paths = [seg.audio_path for seg in left_segments if seg.audio_path]
+                                if left_audio_paths:
+                                    if self._concat_audio_files(left_audio_paths, left_merged_for_scene):
+                                        left_aligned_path = left_merged_for_scene
+                            
+                            # 合并右边说话人音频
+                            if right_segments:
+                                right_merged_for_scene = os.path.join(self.output_dir, f"right_{tone}_{task.task_id}.wav")
+                                right_audio_paths = [seg.audio_path for seg in right_segments if seg.audio_path]
+                                if right_audio_paths:
+                                    if self._concat_audio_files(right_audio_paths, right_merged_for_scene):
+                                        right_aligned_path = right_merged_for_scene
+                        else:
+                            # 非场景标签：进行音频对齐
+                            if left_segments:
+                                left_aligned = self._create_aligned_audio_for_tone(
+                                    segments=left_segments,
+                                    silence_duration=right_duration,
+                                    speaker="left",
+                                    tone=tone,
+                                    task_id=task.task_id,
+                                    prepend_silence=False
+                                )
+                                if left_aligned:
+                                    left_aligned_segments.append(left_aligned)
+                                    left_aligned_path = left_aligned
+                                    logger.info(f"标签 '{tone}' 左边音频对齐完成: {left_aligned}")
+                            
+                            if right_segments:
+                                right_aligned = self._create_aligned_audio_for_tone(
+                                    segments=right_segments,
+                                    silence_duration=left_duration,
+                                    speaker="right",
+                                    tone=tone,
+                                    task_id=task.task_id,
+                                    prepend_silence=True
+                                )
+                                if right_aligned:
+                                    right_aligned_segments.append(right_aligned)
+                                    right_aligned_path = right_aligned
+                                    logger.info(f"标签 '{tone}' 右边音频对齐完成: {right_aligned}")
+                        
+                        # 保存该标签组的音频路径
+                        if left_aligned_path or right_aligned_path:
+                            tone_audio_paths[tone] = {
+                                "left": left_aligned_path,
+                                "right": right_aligned_path
+                            }
+                    except Exception as e:
+                        logger.error(f"处理标签 '{tone}' 时发生异常：{e}")
+                        # 即使当前标签处理失败，也继续处理后续标签
+                        continue
+        
+            # 保存按标签分组的音频路径到 task（用于双人模式视频合成）
+            task.tone_audio_paths = tone_audio_paths
+            logger.info(f"按标签分组的音频路径已保存，共 {len(tone_audio_paths)} 个标签")
+            
+            # 注释：不再需要合并所有标签组的对齐音频
+            # if left_aligned_segments:
+            #     left_merged_path = os.path.join(self.output_dir, f"left_merged_{task.task_id}.wav")
+            #     if self._concat_audio_files(left_aligned_segments, left_merged_path):
+            #         task.left_merged_audio_path = left_merged_path
+            #         logger.info(f"左边说话人所有标签音频合并完成: {left_merged_path}")
+            # 
+            # if right_aligned_segments:
+            #     right_merged_path = os.path.join(self.output_dir, f"right_merged_{task.task_id}.wav")
+            #     if self._concat_audio_files(right_aligned_segments, right_merged_path):
+            #         task.right_merged_audio_path = right_merged_path
+            #         logger.info(f"右边说话人所有标签音频合并完成: {right_merged_path}")
+        except Exception as e:
+            logger.error(f"音频合并流程发生异常：{e}")
+            # 确保至少设置一个空的 tone_audio_paths
+            if not hasattr(task, 'tone_audio_paths'):
+                task.tone_audio_paths = {}
+    
+    def _create_aligned_audio_for_tone(
+        self,
+        segments: List[AudioSegmentResult],
+        silence_duration: float,
+        speaker: str,
+        tone: str,
+        task_id: str,
+        prepend_silence: bool = False
+    ) -> Optional[str]:
+        """
+        为单个标签组创建时长对齐的音频文件
+        
+        Args:
+            segments: 该标签下该说话人的音频段落列表
+            silence_duration: 需要添加的静音时长（秒）
+            speaker: 说话人标识（left/right）
+            tone: 标签名称
+            task_id: 任务ID
+            prepend_silence: 是否在前面添加静音
+            
+        Returns:
+            对齐后的音频文件路径，失败返回 None
+        """
+        import subprocess
+        
+        if not segments:
+            return None
+        
+        # 计算该标签下该说话人的音频总时长
+        audio_total_duration = sum(getattr(s, 'duration', 0.0) for s in segments)
+        
+        logger.info(f"标签 '{tone}' {speaker} 说话人: 音频 {audio_total_duration:.2f}秒, 静音 {silence_duration:.2f}秒")
+        
+        # 生成对齐后的音频文件名
+        safe_tone = tone.replace("/", "_").replace("\\", "_") if tone else "default"
+        output_filename = f"{speaker}_{safe_tone}_{task_id}.wav"
+        output_path = os.path.join(self.output_dir, output_filename)
+        
+        try:
+            # 步骤1：合并该标签下该说话人的所有音频段落
+            temp_concat_file = os.path.join(self.output_dir, f"temp_concat_{speaker}_{safe_tone}_{task_id}.txt")
+            
+            with open(temp_concat_file, 'w', encoding='utf-8') as f:
+                for seg in segments:
+                    audio_path = seg.audio_path
+                    # 转换为绝对路径
+                    if not os.path.isabs(audio_path):
+                        audio_path = os.path.abspath(audio_path)
+                    if os.path.exists(audio_path):
+                        escaped_path = audio_path.replace("'", "'\\''")
+                        f.write(f"file '{escaped_path}'\n")
+            
+            temp_merged_path = os.path.join(self.output_dir, f"temp_merged_{speaker}_{safe_tone}_{task_id}.wav")
+            
+            cmd = [
+                "ffmpeg",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", temp_concat_file,
+                "-c:a", "pcm_s16le",
+                "-ar", "16000",
+                "-ac", "1",
+                "-y",
+                temp_merged_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if os.path.exists(temp_concat_file):
+                os.remove(temp_concat_file)
+            
+            if result.returncode != 0:
+                logger.error(f"合并标签 '{tone}' {speaker} 音频段落失败: {result.stderr}")
+                return None
+            
+            # 步骤2：添加静音
+            if silence_duration <= 0:
+                if os.path.exists(temp_merged_path):
+                    os.rename(temp_merged_path, output_path)
+                    return output_path
+            
+            silence_ms = int(silence_duration * 1000)
+            
+            if prepend_silence:
+                # 前面添加静音，后面保持声音
+                filter_complex = f"[0:a]adelay={silence_ms}|{silence_ms}[a]"
+                cmd = [
+                    "ffmpeg",
+                    "-i", temp_merged_path,
+                    "-filter_complex", filter_complex,
+                    "-map", "[a]",
+                    "-c:a", "pcm_s16le",
+                    "-ar", "16000",
+                    "-ac", "1",
+                    "-y",
+                    output_path
+                ]
+            else:
+                # 前面保持声音，后面添加静音
+                total_duration = audio_total_duration + silence_duration
+                filter_complex = f"[0:a]apad=whole_dur={total_duration}[a]"
+                cmd = [
+                    "ffmpeg",
+                    "-i", temp_merged_path,
+                    "-filter_complex", filter_complex,
+                    "-map", "[a]",
+                    "-c:a", "pcm_s16le",
+                    "-ar", "16000",
+                    "-ac", "1",
+                    "-y",
+                    output_path
+                ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if os.path.exists(temp_merged_path):
+                os.remove(temp_merged_path)
+            
+            if result.returncode != 0:
+                logger.error(f"添加静音失败: {result.stderr}")
+                return None
+            
+            if os.path.exists(output_path):
+                return output_path
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"创建对齐音频时发生异常: {e}")
+            return None
+    
+    def _generate_silence_file(self, duration: float) -> Optional[str]:
+        """
+        生成静音音频文件
+        
+        Args:
+            duration: 静音时长（秒）
+            
+        Returns:
+            静音文件路径，失败返回 None
+        """
+        if duration <= 0:
+            return None
+            
+        try:
+            import tempfile
+            import subprocess
+            
+            # 创建临时静音文件
+            silence_path = os.path.join(self.output_dir, f"silence_{uuid.uuid4().hex[:8]}.wav")
+            
+            cmd = [
+                "ffmpeg",
+                "-f", "lavfi",
+                "-i", f"anullsrc=r=16000:cl=mono",
+                "-t", str(duration),
+                "-c:a", "pcm_s16le",
+                "-y",
+                silence_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0 and os.path.exists(silence_path):
+                return silence_path
+            else:
+                logger.error(f"生成静音文件失败: {result.stderr}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"生成静音文件时发生异常: {e}")
+            return None
+    
+    def _concat_audio_files(self, audio_files: List[str], output_path: str) -> bool:
+        """
+        合并多个音频文件
+        
+        Args:
+            audio_files: 音频文件路径列表
+            output_path: 输出文件路径
+            
+        Returns:
+            是否成功
+        """
+        import subprocess
+        
+        if not audio_files:
+            logger.warning("没有音频文件需要合并")
+            return False
+        
+        try:
+            # 方法1：使用 concat 协议
+            concat_file = os.path.join(self.output_dir, f"concat_{uuid.uuid4().hex[:8]}.txt")
+            
+            with open(concat_file, 'w', encoding='utf-8') as f:
+                for audio_path in audio_files:
+                    # 转换为绝对路径
+                    if not os.path.isabs(audio_path):
+                        audio_path = os.path.abspath(audio_path)
+                    if os.path.exists(audio_path):
+                        # 路径中可能包含特殊字符，需要转义
+                        escaped_path = audio_path.replace("'", "'\\''")
+                        f.write(f"file '{escaped_path}'\n")
+            
+            cmd = [
+                "ffmpeg",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", concat_file,
+                "-c:a", "pcm_s16le",
+                "-ar", "16000",
+                "-ac", "1",
+                "-y",
+                output_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            # 清理临时文件
+            if os.path.exists(concat_file):
+                os.remove(concat_file)
+            
+            if result.returncode == 0:
+                return True
+            else:
+                logger.error(f"合并音频失败: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"合并音频时发生异常: {e}")
+            return False
+
+    def _create_aligned_audio(
+        self,
+        segments: List[AudioSegmentResult],
+        silence_duration: float,
+        speaker: str,
+        task_id: str,
+        prepend_silence: bool = False
+    ) -> Optional[str]:
+        """
+        创建时长对齐的音频文件
+        
+        Args:
+            segments: 音频段落列表
+            silence_duration: 需要添加的静音时长（秒）
+            speaker: 说话人标识（left/right）
+            task_id: 任务ID
+            prepend_silence: 是否在前面添加静音（True=前面静音后面声音，False=前面声音后面静音）
+            
+        Returns:
+            合并后的音频文件路径，失败返回 None
+        """
+        import os
+        import subprocess
+        
+        if not segments:
+            logger.error(f"{speaker} 说话人没有音频段落")
+            return None
+        
+        # 计算所有音频的总时长
+        audio_total_duration = sum(getattr(s, 'duration', 0.0) for s in segments)
+        
+        logger.info(f"{speaker} 说话人音频总时长: {audio_total_duration:.2f}秒, 静音时长: {silence_duration:.2f}秒")
+        
+        # 生成合并后的音频文件名
+        output_filename = f"{speaker}_aligned_{task_id}.wav"
+        output_path = os.path.join(self.output_dir, output_filename)
+        
+        try:
+            # 构建 ffmpeg 命令
+            # 方法：使用 amix 或 adelay 滤镜
+            # 这里使用更简单的方法：先生成音频列表，然后用 adelay 添加静音
+            
+            # 步骤1：合并所有音频段落
+            temp_concat_file = os.path.join(self.output_dir, f"temp_concat_{speaker}_{task_id}.txt")
+            
+            with open(temp_concat_file, 'w', encoding='utf-8') as f:
+                for seg in segments:
+                    if os.path.exists(seg.audio_path):
+                        escaped_path = seg.audio_path.replace("'", "'\\''")
+                        f.write(f"file '{escaped_path}'\n")
+            
+            # 临时合并文件
+            temp_merged_path = os.path.join(self.output_dir, f"temp_merged_{speaker}_{task_id}.wav")
+            
+            # 合并所有音频段落
+            cmd = [
+                "ffmpeg",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", temp_concat_file,
+                "-c:a", "pcm_s16le",
+                "-ar", "16000",
+                "-ac", "1",
+                "-y",
+                temp_merged_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                logger.error(f"合并音频段落失败: {result.stderr}")
+                if os.path.exists(temp_concat_file):
+                    os.remove(temp_concat_file)
+                return None
+            
+            # 清理临时文件
+            if os.path.exists(temp_concat_file):
+                os.remove(temp_concat_file)
+            
+            # 步骤2：添加静音
+            if silence_duration <= 0:
+                # 如果不需要添加静音，直接返回合并后的音频
+                if os.path.exists(temp_merged_path):
+                    os.rename(temp_merged_path, output_path)
+                    return output_path
+            
+            # 使用 adelay 滤镜添加静音
+            # 对于左边说话人（prepend_silence=False）：前面声音，后面静音
+            # 对于右边说话人（prepend_silence=True）：前面静音，后面声音
+            
+            silence_ms = int(silence_duration * 1000)
+            
+            if prepend_silence:
+                # 前面添加静音，后面保持声音
+                filter_complex = f"[0:a]adelay={silence_ms}|{silence_ms}[a]"
+            else:
+                # 前面保持声音，后面添加静音
+                # 需要先获取音频时长，然后在后面添加静音
+                # 使用 apad 滤镜在音频末尾添加静音
+                filter_complex = f"[0:a]apad=whole_dur={audio_total_duration + silence_duration}[a]"
+            
+            cmd = [
+                "ffmpeg",
+                "-i", temp_merged_path,
+                "-af", filter_complex,
+                "-c:a", "pcm_s16le",
+                "-ar", "16000",
+                "-ac", "1",
+                "-y",
+                output_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            # 清理临时文件
+            if os.path.exists(temp_merged_path):
+                os.remove(temp_merged_path)
+            
+            if result.returncode == 0 and os.path.exists(output_path):
+                logger.info(f"{speaker} 说话人时长对齐音频生成成功: {output_path}")
+                return output_path
+            else:
+                logger.error(f"{speaker} 说话人时长对齐音频生成失败: {result.stderr}")
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                return None
+                
+        except Exception as e:
+            logger.error(f"{speaker} 说话人时长对齐音频生成时发生异常: {e}")
+            return None
+
+    def _get_latest_audio(self, max_retries: int = 5, retry_delay: float = 2.0) -> Optional[str]:
+        """
+        获取最新生成的音频（带重试机制）
+        
+        Args:
+            max_retries: 最大重试次数，默认 5 次
+            retry_delay: 重试间隔（秒），默认 2.0 秒
+            
+        Returns:
+            音频文件路径，如果获取失败则返回 None
+        """
+        for attempt in range(1, max_retries + 1):
+            try:
+                tasks, latest_player, latest_download = self.tts_client.refresh_outputs()
+                
+                # 尝试从 latest_download 中提取音频路径
+                if latest_download:
+                    audio_path = self._extract_audio_path(latest_download)
+                    if audio_path:
+                        logger.info(f"在第 {attempt} 次尝试时成功获取音频")
+                        return audio_path
+                
+                # 尝试从 latest_player 中提取音频路径
+                if latest_player:
+                    audio_path = self._extract_audio_path(latest_player)
+                    if audio_path:
+                        logger.info(f"在第 {attempt} 次尝试时成功获取音频")
+                        return audio_path
+                
+                # 尝试从任务列表中提取最新音频
+                if tasks:
+                    # 假设 tasks 是字典，尝试获取最新任务
+                    for task_id, task_info in tasks.items():
+                        if isinstance(task_info, dict):
+                            output = task_info.get("output", {})
+                            audio_path = self._extract_audio_path(output.get("audio", ""))
+                            if audio_path:
+                                logger.info(f"在第 {attempt} 次尝试时成功获取音频")
+                                return audio_path
+                
+                # 如果没有获取到音频，继续重试
+                if attempt < max_retries:
+                    logger.warning(f"音频尚未生成完成（尝试 {attempt}/{max_retries}）")
+                    logger.info(f"等待 {retry_delay} 秒后重试...")
+                    time.sleep(retry_delay)
+                    
+            except Exception as e:
+                logger.error(f"第 {attempt} 次尝试时获取音频失败：{e}")
+                if attempt < max_retries:
+                    logger.info(f"等待 {retry_delay} 秒后重试...")
+                    time.sleep(retry_delay)
+        
+        logger.error("尝试多次后仍未获取到音频")
+        return None
+    
+    def _extract_audio_path(self, latest_audio) -> Optional[str]:
+        """
+        从不同格式的响应中提取音频路径
+        
+        Args:
+            latest_audio: 从 TTS 服务返回的音频信息
+            
+        Returns:
+            音频文件路径，如果无法提取则返回 None
+        """
+        if isinstance(latest_audio, dict):
+            # 处理 {'value': None, '__type__': 'update'} 这种情况
+            if latest_audio.get("__type__") == "update":
+                value = latest_audio.get("value")
+                if value is None:
+                    return None
+                elif isinstance(value, str):
+                    return value
+                elif isinstance(value, dict):
+                    return self._get_path_from_dict(value)
+            # 尝试直接获取文件路径
+            return self._get_path_from_dict(latest_audio)
+        elif isinstance(latest_audio, str):
+            return latest_audio
+        else:
+            logger.warning(f"未知的音频路径类型：{type(latest_audio)}")
+            return None
+    
+    def _get_path_from_dict(self, data: dict) -> Optional[str]:
+        """
+        从字典中提取路径信息
+        
+        Args:
+            data: 包含路径信息的字典
+            
+        Returns:
+            路径字符串，如果无法提取则返回 None
+        """
+        if "path" in data:
+            return data["path"]
+        elif "name" in data:
+            return data["name"]
+        else:
+            logger.warning(f"无法从字典中提取音频路径：{data}")
+            return None
+
+
+
+
+
+
+    def _save_audio(self, source_path: str, filename: str) -> str:
+        """保存音频到输出目录"""
+        import shutil
+
+        output_path = os.path.join(self.output_dir, filename)
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        try:
+            # 检查 source_path 是否为字符串
+            if not isinstance(source_path, str):
+                logger.error(f"音频源路径类型错误: {type(source_path)}, 值: {source_path}")
+                # 如果是字典，尝试提取路径
+                if isinstance(source_path, dict):
+                    if "path" in source_path:
+                        source_path = source_path["path"]
+                    elif "name" in source_path:
+                        source_path = source_path["name"]
+                    else:
+                        logger.error(f"无法从字典中提取路径: {source_path}")
+                        return output_path
+                else:
+                    return output_path
+            
+            # 尝试找到源文件
+            source_file = source_path
+            if not os.path.exists(source_file):
+                # 尝试不同的可能路径
+                possible_paths = [
+                    source_path,
+                    os.path.join("outputs", source_path),  # IndexTTS outputs 目录
+                    os.path.join("..", source_path),
+                    os.path.join(os.getcwd(), source_path),
+                    os.path.join(os.getcwd(), "outputs", source_path),
+                ]
+                for p in possible_paths:
+                    if os.path.exists(p):
+                        source_file = p
+                        logger.debug(f"找到源音频文件: {source_file}")
+                        break
+            
+            if os.path.exists(source_file):
+                shutil.copy2(source_file, output_path)
+                logger.info(f"音频已保存: {output_path}")
+            else:
+                logger.error(f"音频源文件不存在: {source_path}, 已尝试: {possible_paths}")
+        except Exception as e:
+            logger.error(f"保存音频失败: {e}")
+
+        return output_path
+
+    def _get_audio_duration(self, audio_path: str) -> float:
+        """获取音频时长"""
+        try:
+            import wave
+            with wave.open(audio_path, 'r') as w:
+                frames = w.getnframes()
+                rate = w.getframerate()
+                return frames / rate if rate > 0 else 0.0
+        except wave.Error as e:
+            logger.error(f"音频文件格式错误: {e}")
+            return 0.0
+        except Exception as e:
+            logger.error(f"获取音频时长时发生异常: {e}")
+            raise
+
+    def concatenate_audio(
+        self,
+        audio_paths: List[str],
+        output_path: str
+    ) -> bool:
+        """
+        合并多个音频文件
+
+        Args:
+            audio_paths: 音频路径列表
+            output_path: 输出路径
+
+        Returns:
+            是否成功
+        """
+        if not audio_paths:
+            return False
+
+        try:
+            # 使用 ffmpeg 合并
+            import subprocess
+
+            # 创建临时文件列表
+            list_file = os.path.join(self.output_dir, "concat_list.txt")
+            with open(list_file, 'w', encoding='utf-8') as f:
+                for path in audio_paths:
+                    f.write(f"file '{path}'\n")
+
+            cmd = [
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", list_file, "-c", "copy", output_path
+            ]
+
+            subprocess.run(cmd, check=True, capture_output=True)
+            os.remove(list_file)
+
+            logger.info(f"音频合并成功: {output_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"音频合并失败: {e}")
+            return False
+
+    def add_fade(
+        self,
+        audio_path: str,
+        fade_in: float = 0.02,
+        fade_out: float = 0.02
+    ) -> str:
+        """
+        添加淡入淡出
+
+        Args:
+            audio_path: 音频路径
+            fade_in: 淡入时长（秒）
+            fade_out: 淡出时长（秒）
+
+        Returns:
+            处理后的音频路径
+        """
+        import subprocess
+
+        output_path = audio_path.replace(".wav", "_fade.wav")
+
+        cmd = [
+            "ffmpeg", "-y", "-i", audio_path,
+            "-af", f"afade=t=in:st=0:d={fade_in},afade=t=out:st=-{fade_out}:d={fade_out}",
+            output_path
+        ]
+
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+            return output_path
+        except Exception as e:
+            logger.error(f"添加淡入淡出失败: {e}")
+            return audio_path
+
+    def close(self):
+        """关闭客户端"""
+        if self.tts_client:
+            self.tts_client.close()
+
+
+def create_audio_processor(
+    tts_host: str = "http://localhost:7860",
+    output_dir: str = "temp/audio",
+    enable_denoise: bool = True,
+    denoise_strength: float = 0.7
+) -> AudioProcessor:
+    """创建音频处理器的便捷函数
+    
+    Args:
+        tts_host: IndexTTS 服务地址
+        output_dir: 音频输出目录
+        enable_denoise: 是否启用降噪
+        denoise_strength: 降噪强度
+    """
+    return AudioProcessor(
+        tts_host=tts_host,
+        output_dir=output_dir,
+        enable_denoise=enable_denoise,
+        denoise_strength=denoise_strength
+    )

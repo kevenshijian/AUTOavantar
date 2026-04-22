@@ -1,0 +1,97 @@
+--- Logging error ---
+Traceback (most recent call last):
+  File "C:\AUTOavantar\py310\lib\logging\__init__.py", line 1103, in emit
+    stream.write(msg + self.terminator)
+UnicodeEncodeError: 'gbk' codec can't encode character '\u2705' in position 51: illegal multibyte sequence
+Call stack:
+  File "<string>", line 1, in <module>
+  File "C:\AUTOavantar\py310\lib\multiprocessing\spawn.py", line 116, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "C:\AUTOavantar\py310\lib\multiprocessing\spawn.py", line 129, in _main
+    return self._bootstrap(parent_sentinel)
+  File "C:\AUTOavantar\py310\lib\multiprocessing\process.py", line 314, in _bootstrap
+    self.run()
+  File "C:\AUTOavantar\py310\lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "C:\AUTOavantar\py310\lib\site-packages\uvicorn\_subprocess.py", line 80, in subprocess_started
+    target(sockets=sockets)
+  File "C:\AUTOavantar\py310\lib\site-packages\uvicorn\server.py", line 65, in run
+    return asyncio.run(self.serve(sockets=sockets))
+  File "C:\AUTOavantar\py310\lib\asyncio\runners.py", line 44, in run
+    return loop.run_until_complete(main)
+  File "C:\AUTOavantar\py310\lib\asyncio\base_events.py", line 636, in run_until_complete
+    self.run_forever()
+  File "C:\AUTOavantar\py310\lib\asyncio\base_events.py", line 603, in run_forever
+    self._run_once()
+  File "C:\AUTOavantar\py310\lib\asyncio\base_events.py", line 1909, in _run_once
+    handle._run()
+  File "C:\AUTOavantar\py310\lib\asyncio\events.py", line 80, in _run
+    self._context.run(self._callback, *self._args)
+  File "C:\AUTOavantar\py310\lib\site-packages\uvicorn\lifespan\on.py", line 86, in main
+    await app(scope, self.receive, self.send)
+  File "C:\AUTOavantar\py310\lib\site-packages\uvicorn\middleware\proxy_headers.py", line 29, in __call__
+    return await self.app(scope, receive, send)
+  File "C:\AUTOavantar\py310\lib\site-packages\fastapi\applications.py", line 1160, in __call__
+    await super().__call__(scope, receive, send)
+  File "C:\AUTOavantar\py310\lib\site-packages\starlette\applications.py", line 107, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\AUTOavantar\py310\lib\site-packages\starlette\middleware\errors.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "C:\AUTOavantar\py310\lib\site-packages\starlette\middleware\cors.py", line 79, in __call__
+    await self.app(scope, receive, send)
+  File "C:\AUTOavantar\py310\lib\site-packages\starlette\middleware\exceptions.py", line 49, in __call__
+    await self.app(scope, receive, send)
+  File "C:\AUTOavantar\py310\lib\site-packages\fastapi\middleware\asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "C:\AUTOavantar\py310\lib\site-packages\starlette\routing.py", line 716, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\AUTOavantar\py310\lib\site-packages\starlette\routing.py", line 725, in app
+    await self.lifespan(scope, receive, send)
+  File "C:\AUTOavantar\py310\lib\site-packages\starlette\routing.py", line 694, in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+  File "C:\AUTOavantar\py310\lib\contextlib.py", line 199, in __aenter__
+    return await anext(self.gen)
+  File "C:\AUTOavantar\py310\lib\site-packages\fastapi\routing.py", line 212, in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+  File "C:\AUTOavantar\py310\lib\contextlib.py", line 199, in __aenter__
+    return await anext(self.gen)
+  File "C:\AUTOavantar\py310\lib\site-packages\fastapi\routing.py", line 212, in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+  File "C:\AUTOavantar\py310\lib\contextlib.py", line 199, in __aenter__
+    return await anext(self.gen)
+  File "C:\AUTOavantar\py310\lib\site-packages\fastapi\routing.py", line 212, in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+  File "C:\AUTOavantar\py310\lib\contextlib.py", line 199, in __aenter__
+    return await anext(self.gen)
+  File "C:\AUTOavantar\py310\lib\site-packages\fastapi\routing.py", line 212, in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+  File "C:\AUTOavantar\py310\lib\contextlib.py", line 199, in __aenter__
+    return await anext(self.gen)
+  File "C:\AUTOavantar\py310\lib\site-packages\fastapi\routing.py", line 212, in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+  File "C:\AUTOavantar\py310\lib\contextlib.py", line 199, in __aenter__
+    return await anext(self.gen)
+  File "C:\AUTOavantar\py310\lib\site-packages\fastapi\routing.py", line 212, in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+  File "C:\AUTOavantar\py310\lib\contextlib.py", line 199, in __aenter__
+    return await anext(self.gen)
+  File "C:\AUTOavantar\py310\lib\site-packages\fastapi\routing.py", line 212, in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+  File "C:\AUTOavantar\py310\lib\contextlib.py", line 199, in __aenter__
+    return await anext(self.gen)
+  File "C:\AUTOavantar\py310\lib\site-packages\fastapi\routing.py", line 212, in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+  File "C:\AUTOavantar\py310\lib\contextlib.py", line 199, in __aenter__
+    return await anext(self.gen)
+  File "C:\AUTOavantar\py310\lib\site-packages\fastapi\routing.py", line 212, in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+  File "C:\AUTOavantar\py310\lib\contextlib.py", line 199, in __aenter__
+    return await anext(self.gen)
+  File "C:\AUTOavantar\py310\lib\site-packages\fastapi\routing.py", line 212, in merged_lifespan
+    async with original_context(app) as maybe_original_state:
+  File "C:\AUTOavantar\py310\lib\contextlib.py", line 199, in __aenter__
+    return await anext(self.gen)
+  File "C:\AUTOavantar\backend\api\main.py", line 118, in lifespan
+    logger.info("✅ AUTOavantar API 服务已就绪")
+Message: '✅ AUTOavantar API 服务已就绪'
+Arguments: ()

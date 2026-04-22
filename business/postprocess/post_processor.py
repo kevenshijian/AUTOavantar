@@ -1,0 +1,1046 @@
+"""
+后期处理模块
+实现字幕生成、BGM 混音、封面生成等功能
+"""
+
+import logging
+import os
+import subprocess
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass, field
+
+from core.models.task import Task, TaskConfig, SubtitlePosition
+from business.audio.audio_mixer import AudioMixer
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PostProcessResult:
+    """后期处理结果"""
+    output_path: Optional[str]
+    subtitle_path: Optional[str] = None
+    cover_path: Optional[str] = None
+    status: str = "success"
+    error_message: Optional[str] = None
+    intermediate_files: List[str] = field(default_factory=list)
+
+
+class PostProcessor:
+    """后期处理器"""
+
+    CONFIG_DIR = "backend/config"
+
+    def __init__(
+        self,
+        output_dir: str = "output",
+        qwen_api_key: Optional[str] = None
+    ):
+        """
+        初始化后期处理器
+
+        Args:
+            output_dir: 输出目录
+            qwen_api_key: Qwen-Image API 密钥（可选）
+        """
+        self.output_dir = output_dir
+        self.qwen_api_key = qwen_api_key
+        self.qwen_client = None
+        self.audio_mixer = AudioMixer(temp_dir=os.path.join(output_dir, "temp"))
+        self.cover_prompt_template = self._load_cover_prompt_template()
+        
+        # 初始化 Qwen-Image 客户端
+        if qwen_api_key:
+            try:
+                from core.api_clients import QwenImageClient
+                self.qwen_client = QwenImageClient(api_key=qwen_api_key)
+                logger.info("Qwen-Image 客户端初始化成功")
+            except Exception as e:
+                logger.warning(f"Qwen-Image 客户端初始化失败：{e}")
+        
+        os.makedirs(output_dir, exist_ok=True)
+
+    def _load_cover_prompt_template(self) -> str:
+        """从系统设置加载封面提示词模版"""
+        default_template = "根据文案{summary}生成视频封面，风格简洁，突出主题"
+        try:
+            config_path = os.path.join(self.CONFIG_DIR, "prompt_templates.yaml")
+            if os.path.exists(config_path):
+                import yaml
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    data = yaml.safe_load(f)
+                    if data and 'cover_prompt_template' in data:
+                        return data['cover_prompt_template']
+        except Exception as e:
+            logger.warning(f"加载封面提示词模版失败: {e}")
+        return default_template
+
+    def process(
+        self,
+        task: Task,
+        config: TaskConfig
+    ) -> PostProcessResult:
+        """
+        执行后期处理
+
+        Args:
+            task: 任务
+            config: 配置
+
+        Returns:
+            处理结果
+        """
+        try:
+            # 1. 合并视频片段
+            video_paths = []
+            
+            # 处理双人模式
+            if config.enable_double_mode:
+                # 检查是否有 final_video_path（双人模式在 video_synthesizer 中已合并完成）
+                if hasattr(task, 'final_video_path') and task.final_video_path:
+                    video_paths.append(task.final_video_path)
+                    logger.info(f"双人模式：使用已合并的视频: {task.final_video_path}")
+                # 检查是否有左右说话人的视频（备选方案）
+                elif hasattr(task, 'left_video_path') and hasattr(task, 'right_video_path'):
+                    if task.left_video_path:
+                        video_paths.append(task.left_video_path)
+                    if task.right_video_path:
+                        video_paths.append(task.right_video_path)
+            else:
+                # 单人模式
+                video_paths = [seg.output_path for seg in task.segments if seg.output_path]
+            
+            if not video_paths:
+                return PostProcessResult(
+                    output_path=None,
+                    status="failed",
+                    error_message="没有视频片段可合并"
+                )
+
+            # 如果只有一个视频片段，直接使用该视频，避免不必要的合并
+            intermediate_files = []
+            if len(video_paths) == 1:
+                logger.info(f"只有一个视频片段，直接使用原视频: {video_paths[0]}")
+                output_path = video_paths[0]
+                # 复制到输出目录，避免修改原文件
+                import shutil
+                target_path = os.path.join(
+                    self.output_dir,
+                    f"{task.task_id}.mp4"
+                )
+                try:
+                    shutil.copy2(output_path, target_path)
+                    # 记录原始视频作为中间文件（双人模式的 merged_*.mp4）
+                    if output_path != target_path:
+                        intermediate_files.append(output_path)
+                    output_path = target_path
+                    logger.info(f"已复制视频到输出目录: {output_path}")
+                except Exception as e:
+                    logger.warning(f"复制视频失败，将使用原路径: {e}")
+            else:
+                # 多个视频片段，需要合并
+                output_path = os.path.join(
+                    self.output_dir,
+                    f"{task.task_id}.mp4"
+                )
+
+                # 合并视频
+                success = self._concat_videos(video_paths, output_path)
+                if not success:
+                    logger.error("视频合并失败")
+                    return PostProcessResult(
+                        output_path=None,
+                        status="failed",
+                        error_message="视频合并失败"
+                    )
+                
+                if not os.path.exists(output_path):
+                    logger.error(f"视频合并成功，但文件不存在: {output_path}")
+                    return PostProcessResult(
+                        output_path=None,
+                        status="failed",
+                        error_message="视频合并后文件不存在"
+                    )
+                
+                logger.info(f"视频合并成功: {output_path}")
+
+            # 2. 添加字幕
+            subtitle_path = None
+            if config.enable_subtitle:
+                logger.info("开始添加字幕...")
+                subtitle_path = self._add_subtitle(
+                    output_path,
+                    task,
+                    config
+                )
+            else:
+                logger.info("字幕功能已禁用，跳过字幕添加步骤")
+
+            # 3. 添加 BGM
+            if task.bgm_path:
+                logger.info(f"开始添加 BGM: {task.bgm_path}")
+                output_path = self._add_bgm(
+                    output_path,
+                    task.bgm_path,
+                    config.bgm_volume
+                )
+
+            # 4. 生成封面并插入帧
+            cover_path = None
+            if config.enable_cover:
+                logger.info("开始生成封面...")
+                cover_path = self._generate_cover(output_path, task, config)
+                
+                if cover_path and os.path.exists(cover_path):
+                    logger.info(f"封面生成成功: {cover_path}，开始插入封面帧...")
+                    output_path = self._insert_cover_frames(output_path, cover_path)
+                else:
+                    logger.warning("封面生成失败或封面文件不存在，跳过帧插入")
+
+            logger.info(f"后期处理完成，最终输出路径: {output_path}")
+            return PostProcessResult(
+                output_path=output_path,
+                subtitle_path=subtitle_path,
+                cover_path=cover_path,
+                status="success",
+                intermediate_files=intermediate_files
+            )
+
+        except Exception as e:
+            logger.error(f"后期处理失败: {e}")
+            return PostProcessResult(
+                output_path=None,
+                status="failed",
+                error_message=str(e)
+            )
+
+    def _get_video_metadata(self, video_path: str) -> Dict[str, Any]:
+        """
+        获取视频元数据（分辨率、帧率等）
+        
+        Args:
+            video_path: 视频文件路径
+            
+        Returns:
+            包含元数据的字典
+        """
+        import subprocess
+        import json
+        
+        try:
+            cmd = [
+                'ffprobe',
+                '-v', 'quiet',
+                '-print_format', 'json',
+                '-show_format',
+                '-show_streams',
+                video_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            data = json.loads(result.stdout)
+            
+            video_stream = None
+            for stream in data.get('streams', []):
+                if stream.get('codec_type') == 'video':
+                    video_stream = stream
+                    break
+            
+            if not video_stream:
+                return {}
+            
+            metadata = {
+                'width': int(video_stream.get('width', 1920)),
+                'height': int(video_stream.get('height', 1080)),
+                'r_frame_rate': video_stream.get('r_frame_rate', '30/1'),
+                'duration': float(data.get('format', {}).get('duration', 0)),
+                'bit_rate': data.get('format', {}).get('bit_rate'),
+                'codec_name': video_stream.get('codec_name')
+            }
+            
+            try:
+                num, den = map(int, metadata['r_frame_rate'].split('/'))
+                metadata['fps'] = num / den if den > 0 else 30.0
+            except:
+                metadata['fps'] = 30.0
+            
+            return metadata
+            
+        except Exception as e:
+            logger.error(f"获取视频元数据失败: {e}")
+            return {}
+    
+    def _normalize_video(self, video_path: str, target_width: int, target_height: int, target_fps: float, output_path: str) -> bool:
+        """
+        标准化视频（统一分辨率和帧率）
+        
+        Args:
+            video_path: 输入视频路径
+            target_width: 目标宽度
+            target_height: 目标高度
+            target_fps: 目标帧率
+            output_path: 输出路径
+            
+        Returns:
+            是否成功
+        """
+        import subprocess
+        
+        try:
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', video_path,
+                '-vf', f'scale={target_width}:{target_height},fps={target_fps}',
+                '-c:v', 'libx264',
+                '-crf', '18',
+                '-preset', 'medium',
+                '-c:a', 'aac',
+                '-b:a', '192k',
+                output_path
+            ]
+            
+            logger.info(f"标准化视频: {video_path} -> {output_path} ({target_width}x{target_height}@{target_fps}fps)")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                logger.error(f"视频标准化失败: {result.stderr}")
+                return False
+            
+            logger.info(f"视频标准化成功: {output_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"视频标准化异常: {e}")
+            return False
+    
+    def _concat_videos(self, video_paths: List[str], output_path: str) -> bool:
+        """
+        合并视频（包含分辨率和帧率对齐）
+        
+        Args:
+            video_paths: 视频路径列表
+            output_path: 输出路径
+            
+        Returns:
+            是否成功
+        """
+        if not video_paths:
+            logger.warning("没有视频文件需要合并")
+            return False
+        
+        try:
+            import tempfile
+            
+            temp_dir = tempfile.mkdtemp(prefix="video_normalize_")
+            
+            try:
+                all_metadata = []
+                for path in video_paths:
+                    if os.path.exists(path):
+                        meta = self._get_video_metadata(path)
+                        if meta:
+                            all_metadata.append(meta)
+                
+                if not all_metadata:
+                    logger.error("无法获取任何视频的元数据")
+                    return False
+                
+                target_width = max(m['width'] for m in all_metadata)
+                target_height = max(m['height'] for m in all_metadata)
+                target_fps = max(m.get('fps', 30.0) for m in all_metadata)
+                
+                logger.info(f"统一视频参数: 分辨率 {target_width}x{target_height}, 帧率 {target_fps}fps")
+                
+                normalized_paths = []
+                for i, video_path in enumerate(video_paths):
+                    if not os.path.exists(video_path):
+                        logger.warning(f"视频文件不存在，跳过: {video_path}")
+                        continue
+                    
+                    meta = self._get_video_metadata(video_path)
+                    
+                    if not meta or meta['width'] != target_width or meta['height'] != target_height or abs(meta.get('fps', 30.0) - target_fps) > 0.1:
+                        normalized_path = os.path.join(temp_dir, f"normalized_{i:03d}.mp4")
+                        if self._normalize_video(video_path, target_width, target_height, target_fps, normalized_path):
+                            normalized_paths.append(normalized_path)
+                        else:
+                            logger.warning(f"视频标准化失败，使用原始视频: {video_path}")
+                            normalized_paths.append(video_path)
+                    else:
+                        normalized_paths.append(video_path)
+                
+                list_file = os.path.join(self.output_dir, "concat_list.txt")
+                with open(list_file, 'w', encoding='utf-8') as f:
+                    for path in normalized_paths:
+                        f.write(f"file '{os.path.abspath(path)}'\n")
+                
+                cmd = [
+                    "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                    "-i", list_file, "-c", "copy", output_path
+                ]
+                
+                logger.info(f"合并视频命令: {' '.join(cmd)}")
+                subprocess.run(cmd, check=True, capture_output=True)
+                os.remove(list_file)
+                
+                logger.info(f"视频合并成功: {output_path}")
+                return True
+                
+            finally:
+                import shutil
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    
+        except Exception as e:
+            logger.error(f"视频合并失败: {e}")
+            return False
+
+    def _split_text_to_sentences(self, text: str) -> List[str]:
+        """
+        将文本按句子拆分（一句话一个片段）
+        
+        Args:
+            text: 原始文本
+            
+        Returns:
+            句子列表
+        """
+        import re
+        
+        if not text:
+            return []
+        
+        # 按多种标点符号拆分句子（中英文标点都支持）
+        # 匹配：。！？.!?；；：:，,
+        # 使用更全面的标点符号列表确保每句话都被正确拆分
+        sentences = re.split(r'([。！？.!?；；：:，,])', text)
+        
+        # 合并标点符号和句子
+        result = []
+        for i in range(0, len(sentences), 2):
+            if i + 1 < len(sentences):
+                sentence = sentences[i].strip() + sentences[i + 1].strip()
+            else:
+                sentence = sentences[i].strip()
+            
+            if sentence:
+                result.append(sentence)
+        
+        # 如果没有拆分出句子，返回原文本作为一个句子
+        if not result and text.strip():
+            result = [text.strip()]
+        
+        return result
+
+    def _add_subtitle(
+        self,
+        video_path: str,
+        task: Task,
+        config: TaskConfig
+    ) -> Optional[str]:
+        """
+        添加字幕 - 优化版：基于音频能量检测的动态字幕生成
+        
+        Args:
+            video_path: 视频路径
+            task: 任务对象
+            config: 配置对象
+            
+        Returns:
+            SRT 文件路径，如果失败返回 None
+        """
+        try:
+            srt_path = video_path.replace(".mp4", ".srt")
+            subtitle_index = 1
+            accumulated_time = 0.0
+
+            # 尝试使用优化的字幕生成（基于音频能量检测）
+            use_optimized = self._add_subtitle_optimized(video_path, task, srt_path)
+            
+            if not use_optimized:
+                # 如果优化方法失败，使用原来的方法作为兜底
+                logger.warning("优化字幕生成失败，使用原始方法")
+                with open(srt_path, 'w', encoding='utf-8') as f:
+                    for segment in task.segments:
+                        if not segment.text:
+                            continue
+
+                        # 获取段落的音频时长
+                        segment_duration = getattr(segment, 'duration', 0.0)
+                        if segment_duration <= 0:
+                            segment_duration = 2.0
+
+                        # 将段落文本按句子拆分
+                        sentences = self._split_text_to_sentences(segment.text)
+                        
+                        if not sentences:
+                            continue
+
+                        # 计算每句字幕的显示时长
+                        num_sentences = len(sentences)
+                        total_chars = sum(len(s) for s in sentences)
+                        
+                        for sentence in sentences:
+                            if total_chars > 0:
+                                sentence_duration = segment_duration * (len(sentence) / total_chars)
+                            else:
+                                sentence_duration = segment_duration / num_sentences
+                            
+                            if sentence_duration < 1.0:
+                                sentence_duration = 1.0
+                            
+                            start_time = self._format_srt_time(accumulated_time)
+                            end_time = self._format_srt_time(accumulated_time + sentence_duration)
+
+                            f.write(f"{subtitle_index}\n")
+                            f.write(f"{start_time} --> {end_time}\n")
+                            f.write(f"{sentence}\n\n")
+
+                            subtitle_index += 1
+                            accumulated_time += sentence_duration
+
+            logger.info(f"字幕生成成功: {srt_path}")
+
+            current_srt_path = srt_path
+
+            # 烧录字幕到视频
+            output_path = video_path.replace(".mp4", "_subtitled.mp4")
+
+            srt_path_abs = current_srt_path.replace("\\", "/")
+
+            # 构建字幕样式参数
+            font = getattr(config, 'subtitle_font', "SimHei")
+            font_size = getattr(config, 'subtitle_size', 24)
+            color_str = getattr(config, 'subtitle_color', "white")
+            stroke_color = getattr(config, 'subtitle_stroke_color', "#000000")
+            stroke_width = getattr(config, 'subtitle_stroke_width', 1.0)
+            position = getattr(config, 'subtitle_position', SubtitlePosition.BOTTOM)
+            background_alpha = getattr(config, 'subtitle_background_alpha', 0.0)
+            
+            logger.info(f"字幕样式参数 - 字体: {font}, 字号: {font_size}, 颜色: {color_str}")
+            logger.info(f"字幕样式参数 - 描边颜色: {stroke_color}, 描边宽度: {stroke_width}")
+            logger.info(f"字幕样式参数 - 位置: {position}, 背景透明: {background_alpha}")
+
+            def hex_to_bgr(hex_color: str) -> str:
+                hex_color = hex_color.lstrip('#')
+                if len(hex_color) == 6:
+                    r, g, b = hex_color[0:2], hex_color[2:4], hex_color[4:6]
+                    return f"&H{b}{g}{r}"
+                return "&HFFFFFF"
+
+            if color_str.lower() == "white":
+                primary_color = "&HFFFFFF"
+            elif color_str.lower() == "black":
+                primary_color = "&H000000"
+            else:
+                primary_color = hex_to_bgr(color_str)
+
+            secondary_color = hex_to_bgr(stroke_color)
+
+            if position == SubtitlePosition.TOP:
+                alignment = 6
+            elif position == SubtitlePosition.CENTER:
+                alignment = 10
+            else:
+                alignment = 2
+
+            force_style_parts = [
+                f"FontName={font}",
+                f"FontSize={font_size}",
+                f"PrimaryColour={primary_color}",
+                f"SecondaryColour={secondary_color}",
+                f"Outline={stroke_width}",
+                f"Alignment={alignment}",
+                f"Shadow=0",
+                f"MarginV=30",
+                f"MarginL=10",
+                f"MarginR=10",
+                f"BorderStyle={1 if background_alpha > 0 else 1}",
+            ]
+
+            alpha_value = int(255 * (1 - background_alpha))
+            back_colour = f"&H{alpha_value:02X}000000"
+            force_style_parts.append(f"BackColour={back_colour}")
+
+            force_style = ",".join(force_style_parts)
+
+            subtitle_filter = f"subtitles={srt_path_abs}:force_style='{force_style}'"
+
+            cmd = [
+                "ffmpeg", "-y", "-i", video_path,
+                "-vf", subtitle_filter,
+                "-c:v", "libx264", "-crf", "18",
+                "-c:a", "aac", "-b:a", "192k",
+                output_path
+            ]
+
+            logger.info(f"添加字幕命令: {' '.join(cmd)}")
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+            os.replace(output_path, video_path)
+
+            logger.info(f"字幕添加成功: {srt_path}")
+            return srt_path
+
+        except Exception as e:
+            logger.error(f"添加字幕失败: {e}")
+            import traceback
+            logger.error(f"字幕添加失败详情: {traceback.format_exc()}")
+            return None
+
+    def _add_subtitle_optimized(
+        self,
+        video_path: str,
+        task: Task,
+        srt_path: str
+    ) -> bool:
+        """
+        优化版字幕生成：尝试使用音频能量检测
+        
+        Returns:
+            bool: 是否成功使用优化方法
+        """
+        try:
+            import tempfile
+            import subprocess
+
+            # 1. 先尝试提取音频
+            temp_dir = tempfile.mkdtemp(prefix="audio_extract_")
+            try:
+                audio_wav = os.path.join(temp_dir, "audio.wav")
+                
+                cmd = [
+                    "ffmpeg", "-y", "-i", video_path,
+                    "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+                    audio_wav
+                ]
+                logger.info(f"提取音频命令: {' '.join(cmd)}")
+                subprocess.run(cmd, check=True, capture_output=True)
+                
+                # 2. 尝试使用 pydub 和静默检测
+                try:
+                    from pydub import AudioSegment
+                    from pydub.silence import detect_nonsilent
+                    
+                    audio = AudioSegment.from_wav(audio_wav)
+                    
+                    with open(srt_path, 'w', encoding='utf-8') as f:
+                        subtitle_index = 1
+                        current_audio_position = 0
+                        
+                        for segment in task.segments:
+                            if not segment.text:
+                                if hasattr(segment, 'duration'):
+                                    current_audio_position += int(segment.duration * 1000)
+                                continue
+                            
+                            sentences = self._split_text_to_sentences(segment.text)
+                            if not sentences:
+                                continue
+                            
+                            segment_duration = getattr(segment, 'duration', 2.0)
+                            segment_start_ms = current_audio_position
+                            segment_duration_ms = int(segment_duration * 1000)
+                            segment_end_ms = segment_start_ms + segment_duration_ms
+                            
+                            if segment_end_ms > len(audio):
+                                segment_end_ms = len(audio)
+                            
+                            if segment_start_ms >= len(audio):
+                                current_audio_position = segment_end_ms
+                                continue
+                            
+                            segment_audio = audio[segment_start_ms:segment_end_ms]
+                            
+                            # 检测非静音片段
+                            nonsilent_ranges = detect_nonsilent(
+                                segment_audio,
+                                min_silence_len=300,
+                                silence_thresh=-40
+                            )
+                            
+                            sentence_times = []
+                            
+                            if len(nonsilent_ranges) == len(sentences):
+                                for i, sentence in enumerate(sentences):
+                                    start, end = nonsilent_ranges[i]
+                                    global_start = (segment_start_ms + start) / 1000.0
+                                    global_end = (segment_start_ms + end) / 1000.0
+                                    sentence_times.append((global_start, global_end))
+                            else:
+                                total_nonsilent_duration = sum(end - start for start, end in nonsilent_ranges)
+                                if total_nonsilent_duration == 0:
+                                    total_nonsilent_duration = segment_duration_ms
+                                
+                                current_offset = 0
+                                total_chars = sum(len(s) for s in sentences)
+                                
+                                for sentence in sentences:
+                                    if total_chars > 0:
+                                        duration_ratio = len(sentence) / total_chars
+                                    else:
+                                        duration_ratio = 1.0 / len(sentences) if sentences else 1.0
+                                    
+                                    duration_ms = total_nonsilent_duration * duration_ratio
+                                    
+                                    start_time = (segment_start_ms + current_offset) / 1000.0
+                                    end_time = start_time + (duration_ms / 1000.0)
+                                    sentence_times.append((start_time, end_time))
+                                    
+                                    current_offset += duration_ms
+                            
+                            for i, sentence in enumerate(sentences):
+                                if i < len(sentence_times):
+                                    start_t, end_t = sentence_times[i]
+                                    
+                                    f.write(f"{subtitle_index}\n")
+                                    f.write(f"{self._format_srt_time(start_t)} --> {self._format_srt_time(end_t)}\n")
+                                    f.write(f"{sentence}\n\n")
+                                    
+                                    subtitle_index += 1
+                            
+                            current_audio_position = segment_end_ms
+                    
+                    logger.info("优化版字幕生成成功（基于音频能量检测）")
+                    return True
+                    
+                except ImportError:
+                    logger.warning("pydub 未安装，使用原始字幕生成方法")
+                    return False
+                    
+            finally:
+                import shutil
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    
+        except Exception as e:
+            logger.warning(f"优化版字幕生成失败: {e}，将使用原始方法")
+            return False
+
+    def _format_srt_time(self, seconds: float) -> str:
+        """格式化 SRT 时间"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        ms = int((seconds % 1) * 1000)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
+
+    def _add_bgm(
+        self,
+        video_path: str,
+        bgm_path: str,
+        volume: float = 0.3
+    ) -> str:
+        """添加 BGM（支持循环播放对齐视频长度）"""
+        try:
+            logger.info(f"开始添加 BGM: {bgm_path} 到视频 {video_path}")
+
+            if not os.path.exists(bgm_path):
+                logger.error(f"BGM 文件不存在: {bgm_path}")
+                return video_path
+
+            output_path = video_path.replace(".mp4", "_bgm.mp4")
+
+            video_duration = self._get_media_duration(video_path)
+            bgm_duration = self._get_media_duration(bgm_path)
+
+            logger.info(f"视频时长: {video_duration}s, BGM时长: {bgm_duration}s")
+
+            if bgm_duration < video_duration and bgm_duration > 0:
+                loop_count = int(video_duration / bgm_duration) + 1
+                logger.info(f"BGM 需要循环 {loop_count} 次")
+
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", video_path,
+                    "-stream_loop", str(loop_count),
+                    "-i", bgm_path,
+                    "-filter_complex",
+                    f"[1:a]volume={volume}[bgm];[0:a][bgm]amix=inputs=2:duration=first[aout]",
+                    "-map", "0:v",
+                    "-map", "[aout]",
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    output_path
+                ]
+            else:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", video_path,
+                    "-i", bgm_path,
+                    "-filter_complex",
+                    f"[1:a]volume={volume}[bgm];[0:a][bgm]amix=inputs=2:duration=first[aout]",
+                    "-map", "0:v",
+                    "-map", "[aout]",
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    output_path
+                ]
+
+            logger.info(f"BGM 添加命令: {' '.join(cmd)}")
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            logger.info(f"BGM 添加成功")
+
+            os.replace(output_path, video_path)
+
+            return video_path
+
+        except Exception as e:
+            logger.error(f"添加 BGM 失败: {e}")
+            return video_path
+
+    def _get_media_duration(self, media_path: str) -> float:
+        """获取媒体文件时长"""
+        try:
+            cmd = [
+                'ffprobe', '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                media_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return float(result.stdout.strip())
+        except Exception as e:
+            logger.error(f"获取媒体时长失败: {e}")
+            return 0.0
+
+    def _generate_cover(self, video_path: str, task: Task, config=None) -> Optional[str]:
+        """生成视频封面（从开场视频截取帧，调用 qwen-image API）"""
+        try:
+            opening_video = getattr(task, 'opening_video', None)
+            opening_video_with_tags = getattr(task, 'opening_video_with_tags', None)
+            
+            if opening_video_with_tags and hasattr(opening_video_with_tags, 'file_path'):
+                opening_video = opening_video_with_tags.file_path
+            
+            if not opening_video or not os.path.exists(opening_video):
+                logger.warning(f"开场视频不存在，跳过封面生成: {opening_video}")
+                return None
+
+            reference_path = video_path.replace(".mp4", "_reference.jpg")
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", opening_video,
+                "-ss", "00:00:01",
+                "-vframes", "1",
+                "-q:v", "2",
+                reference_path
+            ]
+            subprocess.run(cmd, check=True, capture_output=True)
+
+            if not os.path.exists(reference_path):
+                logger.error("从开场视频截取帧失败")
+                return None
+
+            logger.info(f"从开场视频截取参考帧成功: {reference_path}")
+
+            cover_summary = self._extract_cover_summary(task)
+            cover_prompt = self._build_cover_prompt(cover_summary, config)
+            logger.info(f"封面提示词: {cover_prompt}")
+
+            if self.qwen_client:
+                output_dir = os.path.join(self.output_dir, "covers")
+                cover_path = self.qwen_client.generate_image_from_reference(
+                    prompt=cover_prompt,
+                    reference_image_path=reference_path,
+                    strength=0.5,
+                    output_dir=output_dir
+                )
+
+                if os.path.exists(reference_path):
+                    os.remove(reference_path)
+
+                return cover_path
+            else:
+                logger.warning("Qwen-Image 客户端未初始化，跳过封面生成")
+                if os.path.exists(reference_path):
+                    os.remove(reference_path)
+                return None
+
+        except Exception as e:
+            logger.error(f"封面生成失败: {e}")
+            return None
+
+    def _extract_cover_summary(self, task: Task) -> str:
+        """从文案中提取封面总结"""
+        import re
+        import json
+        
+        script_text = getattr(task, 'script', '')
+        
+        if not script_text:
+            return "视频封面"
+        
+        try:
+            parsed = json.loads(script_text)
+            if isinstance(parsed, dict) and "封面总结" in parsed:
+                return str(parsed["封面总结"]).strip()
+        except (json.JSONDecodeError, TypeError):
+            pass
+        
+        match = re.search(r'封面总结[：:]\s*(.+?)(?:\n|$)', script_text)
+        if match:
+            return match.group(1).strip()
+        
+        if task.segments and len(task.segments) > 0:
+            first_segment = task.segments[0]
+            if hasattr(first_segment, 'text') and first_segment.text:
+                return first_segment.text[:50]
+        
+        return "视频封面"
+
+    def _build_cover_prompt(self, cover_summary: str, config=None) -> str:
+        """构建封面提示词（使用系统设置中的模版）"""
+        template = self.cover_prompt_template
+        prompt = template.replace("{summary}", cover_summary)
+        return prompt
+
+    def _insert_cover_frames(self, video_path: str, cover_path: str, frame_count: int = 5) -> str:
+        """在视频开头插入封面帧"""
+        try:
+            logger.info(f"开始插入封面帧: {cover_path} 到视频 {video_path}")
+
+            if not os.path.exists(cover_path):
+                logger.warning(f"封面图片不存在，跳过帧插入: {cover_path}")
+                return video_path
+
+            output_path = video_path.replace(".mp4", "_with_cover.mp4")
+
+            cover_duration = frame_count / 30.0
+
+            cmd = [
+                "ffmpeg", "-y",
+                "-loop", "1",
+                "-i", cover_path,
+                "-i", video_path,
+                "-filter_complex",
+                f"[0:v]trim=duration={cover_duration}[cover];[cover][1:v]concat=n=2:v=1:a=0[outv]",
+                "-map", "[outv]",
+                "-map", "1:a?",
+                "-c:v", "libx264",
+                "-c:a", "copy",
+                output_path
+            ]
+
+            logger.info(f"封面帧插入命令: {' '.join(cmd)}")
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            logger.info(f"封面帧插入成功")
+
+            os.replace(output_path, video_path)
+
+            return video_path
+
+        except Exception as e:
+            logger.error(f"插入封面帧失败: {e}")
+            return video_path
+    
+    def _generate_cover_with_qwen(
+        self,
+        video_path: str,
+        task: Task
+    ) -> Optional[str]:
+        """
+        使用 Qwen-Image 生成智能封面
+        
+        Args:
+            video_path: 视频路径
+            task: 任务对象
+            
+        Returns:
+            封面图片路径
+        """
+        try:
+            # 1. 提取关键帧作为参考图
+            reference_path = video_path.replace(".mp4", "_reference.jpg")
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-ss", "00:00:02",
+                "-vframes", "1",
+                "-q:v", "2",
+                reference_path
+            ]
+            subprocess.run(cmd, check=True, capture_output=True)
+            
+            if not os.path.exists(reference_path):
+                return None
+            
+            # 2. 生成封面 Prompt（基于文案）
+            cover_prompt = self._generate_cover_prompt(task)
+            
+            # 3. 调用 Qwen-Image API
+            output_dir = os.path.join(self.output_dir, "covers")
+            cover_path = self.qwen_client.generate_image_from_reference(
+                prompt=cover_prompt,
+                reference_image_path=reference_path,
+                strength=0.5,
+                output_dir=output_dir
+            )
+            
+            # 清理参考图
+            if os.path.exists(reference_path):
+                os.remove(reference_path)
+            
+            return cover_path
+            
+        except Exception as e:
+            logger.error(f"Qwen-Image 封面生成失败：{e}")
+            return None
+    
+    def _generate_cover_simple(self, video_path: str) -> Optional[str]:
+        """简单封面生成（提取中间帧）"""
+        try:
+            cover_path = video_path.replace(".mp4", "_cover.jpg")
+            
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-ss", "00:00:02",
+                "-vframes", "1",
+                "-q:v", "2",
+                cover_path
+            ]
+            
+            subprocess.run(cmd, check=True, capture_output=True)
+            
+            return cover_path if os.path.exists(cover_path) else None
+            
+        except Exception as e:
+            logger.error(f"生成封面失败：{e}")
+            return None
+    
+    def _generate_cover_prompt(self, task: Task) -> str:
+        """
+        生成封面提示词
+        
+        Args:
+            task: 任务对象
+            
+        Returns:
+            封面提示词
+        """
+        # 基于文案内容生成简单的提示词
+        texts = [seg.text for seg in task.segments if seg.text]
+        main_text = " ".join(texts[:3]) if texts else "数字人视频"
+        
+        # 构建提示词
+        prompt = f"高质量封面，专业摄影，{main_text}，清晰人脸，电影级别光效，4K 高清"
+        
+        logger.debug(f"封面提示词：{prompt}")
+        return prompt
+
+
+def create_post_processor(
+    output_dir: str = "output",
+    qwen_api_key: Optional[str] = None
+) -> PostProcessor:
+    """创建后期处理器的便捷函数
+    
+    Args:
+        output_dir: 输出目录
+        qwen_api_key: Qwen-Image API 密钥
+    """
+    return PostProcessor(
+        output_dir=output_dir,
+        qwen_api_key=qwen_api_key
+    )
