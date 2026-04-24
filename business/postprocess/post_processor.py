@@ -439,61 +439,94 @@ class PostProcessor:
         config: TaskConfig
     ) -> Optional[str]:
         """
-        添加字幕 - 优化版：基于音频能量检测的动态字幕生成
-        
+        添加字幕 - 使用精确字幕时间轴同步器
+
         Args:
             video_path: 视频路径
             task: 任务对象
             config: 配置对象
-            
+
         Returns:
             SRT 文件路径，如果失败返回 None
         """
         try:
             srt_path = video_path.replace(".mp4", ".srt")
-            subtitle_index = 1
-            accumulated_time = 0.0
 
-            # 尝试使用优化的字幕生成（基于音频能量检测）
-            use_optimized = self._add_subtitle_optimized(video_path, task, srt_path)
-            
-            if not use_optimized:
-                # 如果优化方法失败，使用原来的方法作为兜底
-                logger.warning("优化字幕生成失败，使用原始方法")
+            # 准备段落文本和时长信息
+            segments_text = []
+            segment_durations = []
+            segment_offsets = []
+
+            current_offset = 0.0
+            for segment in task.segments:
+                if segment.text:
+                    segments_text.append(segment.text)
+                    duration = getattr(segment, 'duration', 0.0)
+                    segment_durations.append(duration)
+                    segment_offsets.append(current_offset)
+                    current_offset += duration
+
+            if not segments_text:
+                logger.warning("没有文本内容，跳过字幕生成")
+                return None
+
+            # 使用智能字幕同步器
+            # 结合句子特征、语音规律和音频时长，精确分配字幕时间
+            from business.postprocess.smart_subtitle_synchronizer import SmartSubtitleSynchronizer
+
+            synchronizer = SmartSubtitleSynchronizer(
+                padding_ms=80,  # 字幕提前 80ms 显示
+                buffer_ms=100,  # 段落末尾缓冲
+            )
+
+            success = synchronizer.synchronize(
+                segments_text=segments_text,
+                segment_durations=segment_durations,
+                segment_offsets=segment_offsets,
+                output_srt_path=srt_path,
+            )
+
+            if not success:
+                logger.warning("精确字幕同步失败，使用备用方法")
+                # 备用方法
+                subtitle_index = 1
+                accumulated_time = 0.0
+
                 with open(srt_path, 'w', encoding='utf-8') as f:
                     for segment in task.segments:
                         if not segment.text:
                             continue
 
-                        # 获取段落的音频时长
                         segment_duration = getattr(segment, 'duration', 0.0)
                         if segment_duration <= 0:
                             segment_duration = 2.0
 
-                        # 将段落文本按句子拆分
                         sentences = self._split_text_to_sentences(segment.text)
-                        
+
                         if not sentences:
                             continue
 
-                        # 计算每句字幕的显示时长
                         num_sentences = len(sentences)
                         total_chars = sum(len(s) for s in sentences)
-                        
+
+                        available_duration = segment_duration * 0.95
+
                         for sentence in sentences:
                             if total_chars > 0:
-                                sentence_duration = segment_duration * (len(sentence) / total_chars)
+                                sentence_duration = available_duration * (len(sentence) / total_chars)
                             else:
-                                sentence_duration = segment_duration / num_sentences
-                            
-                            if sentence_duration < 1.0:
-                                sentence_duration = 1.0
-                            
-                            start_time = self._format_srt_time(accumulated_time)
-                            end_time = self._format_srt_time(accumulated_time + sentence_duration)
+                                sentence_duration = available_duration / num_sentences
+
+                            if sentence_duration < 0.8:
+                                sentence_duration = 0.8
+
+                            start_time = accumulated_time - 0.08
+                            if start_time < 0:
+                                start_time = 0.0
+                            end_time = accumulated_time + sentence_duration
 
                             f.write(f"{subtitle_index}\n")
-                            f.write(f"{start_time} --> {end_time}\n")
+                            f.write(f"{self._format_srt_time(start_time)} --> {self._format_srt_time(end_time)}\n")
                             f.write(f"{sentence}\n\n")
 
                             subtitle_index += 1
@@ -588,135 +621,7 @@ class PostProcessor:
             logger.error(f"字幕添加失败详情: {traceback.format_exc()}")
             return None
 
-    def _add_subtitle_optimized(
-        self,
-        video_path: str,
-        task: Task,
-        srt_path: str
-    ) -> bool:
-        """
-        优化版字幕生成：尝试使用音频能量检测
-        
-        Returns:
-            bool: 是否成功使用优化方法
-        """
-        try:
-            import tempfile
-            import subprocess
-
-            # 1. 先尝试提取音频
-            temp_dir = tempfile.mkdtemp(prefix="audio_extract_")
-            try:
-                audio_wav = os.path.join(temp_dir, "audio.wav")
-                
-                cmd = [
-                    "ffmpeg", "-y", "-i", video_path,
-                    "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-                    audio_wav
-                ]
-                logger.info(f"提取音频命令: {' '.join(cmd)}")
-                subprocess.run(cmd, check=True, capture_output=True)
-                
-                # 2. 尝试使用 pydub 和静默检测
-                try:
-                    from pydub import AudioSegment
-                    from pydub.silence import detect_nonsilent
-                    
-                    audio = AudioSegment.from_wav(audio_wav)
-                    
-                    with open(srt_path, 'w', encoding='utf-8') as f:
-                        subtitle_index = 1
-                        current_audio_position = 0
-                        
-                        for segment in task.segments:
-                            if not segment.text:
-                                if hasattr(segment, 'duration'):
-                                    current_audio_position += int(segment.duration * 1000)
-                                continue
-                            
-                            sentences = self._split_text_to_sentences(segment.text)
-                            if not sentences:
-                                continue
-                            
-                            segment_duration = getattr(segment, 'duration', 2.0)
-                            segment_start_ms = current_audio_position
-                            segment_duration_ms = int(segment_duration * 1000)
-                            segment_end_ms = segment_start_ms + segment_duration_ms
-                            
-                            if segment_end_ms > len(audio):
-                                segment_end_ms = len(audio)
-                            
-                            if segment_start_ms >= len(audio):
-                                current_audio_position = segment_end_ms
-                                continue
-                            
-                            segment_audio = audio[segment_start_ms:segment_end_ms]
-                            
-                            # 检测非静音片段
-                            nonsilent_ranges = detect_nonsilent(
-                                segment_audio,
-                                min_silence_len=300,
-                                silence_thresh=-40
-                            )
-                            
-                            sentence_times = []
-                            
-                            if len(nonsilent_ranges) == len(sentences):
-                                for i, sentence in enumerate(sentences):
-                                    start, end = nonsilent_ranges[i]
-                                    global_start = (segment_start_ms + start) / 1000.0
-                                    global_end = (segment_start_ms + end) / 1000.0
-                                    sentence_times.append((global_start, global_end))
-                            else:
-                                total_nonsilent_duration = sum(end - start for start, end in nonsilent_ranges)
-                                if total_nonsilent_duration == 0:
-                                    total_nonsilent_duration = segment_duration_ms
-                                
-                                current_offset = 0
-                                total_chars = sum(len(s) for s in sentences)
-                                
-                                for sentence in sentences:
-                                    if total_chars > 0:
-                                        duration_ratio = len(sentence) / total_chars
-                                    else:
-                                        duration_ratio = 1.0 / len(sentences) if sentences else 1.0
-                                    
-                                    duration_ms = total_nonsilent_duration * duration_ratio
-                                    
-                                    start_time = (segment_start_ms + current_offset) / 1000.0
-                                    end_time = start_time + (duration_ms / 1000.0)
-                                    sentence_times.append((start_time, end_time))
-                                    
-                                    current_offset += duration_ms
-                            
-                            for i, sentence in enumerate(sentences):
-                                if i < len(sentence_times):
-                                    start_t, end_t = sentence_times[i]
-                                    
-                                    f.write(f"{subtitle_index}\n")
-                                    f.write(f"{self._format_srt_time(start_t)} --> {self._format_srt_time(end_t)}\n")
-                                    f.write(f"{sentence}\n\n")
-                                    
-                                    subtitle_index += 1
-                            
-                            current_audio_position = segment_end_ms
-                    
-                    logger.info("优化版字幕生成成功（基于音频能量检测）")
-                    return True
-                    
-                except ImportError:
-                    logger.warning("pydub 未安装，使用原始字幕生成方法")
-                    return False
-                    
-            finally:
-                import shutil
-                if os.path.exists(temp_dir):
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                    
-        except Exception as e:
-            logger.warning(f"优化版字幕生成失败: {e}，将使用原始方法")
-            return False
-
+    
     def _format_srt_time(self, seconds: float) -> str:
         """格式化 SRT 时间"""
         hours = int(seconds // 3600)
@@ -731,7 +636,22 @@ class PostProcessor:
         bgm_path: str,
         volume: float = 0.3
     ) -> str:
-        """添加 BGM（支持循环播放对齐视频长度）"""
+        """
+        添加 BGM（支持循环播放对齐视频长度）
+
+        正确逻辑：
+        1. 视频比 BGM 长 → 循环 BGM
+        2. 视频比 BGM 短 → 截取 BGM
+        3. 输出时长始终等于视频时长
+
+        Args:
+            video_path: 视频文件路径
+            bgm_path: BGM 音频文件路径
+            volume: BGM 音量（0.0-1.0）
+
+        Returns:
+            处理后的视频路径
+        """
         try:
             logger.info(f"开始添加 BGM: {bgm_path} 到视频 {video_path}")
 
@@ -746,9 +666,21 @@ class PostProcessor:
 
             logger.info(f"视频时长: {video_duration}s, BGM时长: {bgm_duration}s")
 
-            if bgm_duration < video_duration and bgm_duration > 0:
+            if video_duration <= 0:
+                logger.error(f"无法获取视频时长，跳过 BGM 添加")
+                return video_path
+
+            if bgm_duration <= 0:
+                logger.error(f"无法获取 BGM 时长，跳过 BGM 添加")
+                return video_path
+
+            # 核心修复：使用 -shortest 确保输出时长等于最短的输入
+            # 同时使用 -t 参数明确指定输出时长为视频时长
+
+            if bgm_duration < video_duration:
+                # BGM 比视频短：需要循环 BGM
                 loop_count = int(video_duration / bgm_duration) + 1
-                logger.info(f"BGM 需要循环 {loop_count} 次")
+                logger.info(f"BGM 需要循环 {loop_count} 次以覆盖视频时长")
 
                 cmd = [
                     "ffmpeg", "-y",
@@ -756,20 +688,24 @@ class PostProcessor:
                     "-stream_loop", str(loop_count),
                     "-i", bgm_path,
                     "-filter_complex",
-                    f"[1:a]volume={volume}[bgm];[0:a][bgm]amix=inputs=2:duration=first[aout]",
+                    f"[1:a]volume={volume}[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]",
                     "-map", "0:v",
                     "-map", "[aout]",
                     "-c:v", "copy",
                     "-c:a", "aac",
+                    "-shortest",  # 确保输出时长等于最短的输入（视频）
                     output_path
                 ]
             else:
+                # BGM 比视频长或相等：截取 BGM
+                logger.info(f"BGM 时长足够，截取前 {video_duration}s")
+
                 cmd = [
                     "ffmpeg", "-y",
                     "-i", video_path,
                     "-i", bgm_path,
                     "-filter_complex",
-                    f"[1:a]volume={volume}[bgm];[0:a][bgm]amix=inputs=2:duration=first[aout]",
+                    f"[1:a]volume={volume},atrim=0:{video_duration},asetpts=PTS-STARTPTS[bgm];[0:a][bgm]amix=inputs=2:duration=first[aout]",
                     "-map", "0:v",
                     "-map", "[aout]",
                     "-c:v", "copy",
@@ -778,8 +714,23 @@ class PostProcessor:
                 ]
 
             logger.info(f"BGM 添加命令: {' '.join(cmd)}")
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            logger.info(f"BGM 添加成功")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if result.returncode != 0:
+                logger.error(f"BGM 添加失败: {result.stderr}")
+                return video_path
+
+            # 验证输出文件
+            if not os.path.exists(output_path):
+                logger.error(f"BGM 添加后输出文件不存在: {output_path}")
+                return video_path
+
+            output_duration = self._get_media_duration(output_path)
+            logger.info(f"BGM 添加成功，输出时长: {output_duration}s (原视频: {video_duration}s)")
+
+            # 验证时长是否正确（允许 0.5 秒误差）
+            if abs(output_duration - video_duration) > 0.5:
+                logger.warning(f"输出时长与原视频时长不匹配，可能存在问题")
 
             os.replace(output_path, video_path)
 
@@ -787,6 +738,8 @@ class PostProcessor:
 
         except Exception as e:
             logger.error(f"添加 BGM 失败: {e}")
+            import traceback
+            logger.error(f"详细错误: {traceback.format_exc()}")
             return video_path
 
     def _get_media_duration(self, media_path: str) -> float:
