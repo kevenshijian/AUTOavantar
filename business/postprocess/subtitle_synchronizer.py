@@ -35,6 +35,7 @@ class IntelligentSubtitleSynchronizer:
     DEFAULT_PADDING_MS = 50  # 字幕前后填充时间（毫秒）
     DEFAULT_MAX_SUBTITLE_DURATION = 5.0  # 单条字幕最大时长（秒）
     DEFAULT_MIN_SUBTITLE_DURATION = 0.5  # 单条字幕最小时长（秒）
+    DEFAULT_MAX_CHARS_PER_SUBTITLE = 12  # 单条字幕最大字数（中文）
 
     def __init__(
         self,
@@ -45,6 +46,7 @@ class IntelligentSubtitleSynchronizer:
         padding_ms: int = DEFAULT_PADDING_MS,
         max_subtitle_duration: float = DEFAULT_MAX_SUBTITLE_DURATION,
         min_subtitle_duration: float = DEFAULT_MIN_SUBTITLE_DURATION,
+        max_chars_per_subtitle: int = DEFAULT_MAX_CHARS_PER_SUBTITLE,
     ):
         """
         初始化字幕同步器
@@ -57,6 +59,7 @@ class IntelligentSubtitleSynchronizer:
             padding_ms: 字幕前后填充时间（毫秒），让字幕稍微提前出现
             max_subtitle_duration: 单条字幕最大时长（秒）
             min_subtitle_duration: 单条字幕最小时长（秒）
+            max_chars_per_subtitle: 单条字幕最大字数（中文）
         """
         self.sample_rate = sample_rate
         self.min_silence_ms = min_silence_ms
@@ -65,6 +68,7 @@ class IntelligentSubtitleSynchronizer:
         self.padding_ms = padding_ms
         self.max_subtitle_duration = max_subtitle_duration
         self.min_subtitle_duration = min_subtitle_duration
+        self.max_chars_per_subtitle = max_chars_per_subtitle
 
     def synchronize(
         self,
@@ -442,14 +446,22 @@ class IntelligentSubtitleSynchronizer:
         return subtitles
 
     def _split_text_to_sentences(self, text: str) -> List[str]:
-        """将文本按句子拆分"""
+        """
+        将文本按标点符号拆分
+
+        改进策略：
+        1. 按所有标点符号拆分（句末标点 + 逗号类标点）
+        2. 单条字幕限制为 max_chars_per_subtitle 字（默认12字）
+        3. 避免单独的标点符号成为一条字幕
+        """
         import re
 
         if not text:
             return []
 
-        # 按多种标点符号拆分句子
-        sentences = re.split(r'([。！？.!?；;：:，,])', text)
+        # 按所有标点符号拆分（中英文标点）
+        # 包括：句末标点（。！？.!?）和逗号类标点（，,；;：:）
+        sentences = re.split(r'([。！？.!?，,；;：:])', text)
 
         # 合并标点符号和句子
         result = []
@@ -460,13 +472,67 @@ class IntelligentSubtitleSynchronizer:
                 sentence = sentences[i].strip()
 
             if sentence:
-                result.append(sentence)
+                # 跳过只有标点符号的片段
+                if all(c in '，,；;：:。！？.!?' for c in sentence.strip()):
+                    continue
+
+                # 如果句子超过字数限制，进一步拆分
+                if len(sentence) > self.max_chars_per_subtitle:
+                    sub_sentences = self._split_by_char_limit(sentence, self.max_chars_per_subtitle)
+                    result.extend(sub_sentences)
+                else:
+                    result.append(sentence)
 
         # 如果没有拆分出句子，返回原文本
         if not result and text.strip():
-            result = [text.strip()]
+            # 如果原文也超长，需要拆分
+            if len(text.strip()) > self.max_chars_per_subtitle:
+                result = self._split_by_char_limit(text.strip(), self.max_chars_per_subtitle)
+            else:
+                result = [text.strip()]
 
         return result
+
+    def _split_by_char_limit(self, text: str, max_chars: int) -> List[str]:
+        """
+        按字数限制分割文本
+
+        策略：
+        1. 严格按字数限制分割，确保每段不超过 max_chars
+        2. 尽量在标点符号后分割，保留标点
+        3. 避免单独的标点符号成为一条字幕
+        """
+        if len(text) <= max_chars:
+            return [text]
+
+        chunks = []
+        remaining = text
+
+        while len(remaining) > max_chars:
+            # 默认在 max_chars 位置分割
+            split_pos = max_chars
+
+            # 尝试在 max_chars 位置附近找一个标点作为分割点
+            for i in range(min(max_chars, len(remaining)) - 1, max(0, max_chars - 5), -1):
+                if remaining[i] in '，,；;：:。！？.!?':
+                    split_pos = i + 1
+                    break
+
+            # 确保分割位置不超过 max_chars
+            split_pos = min(split_pos, max_chars)
+
+            chunk = remaining[:split_pos]
+            # 只有当 chunk 不只是标点符号时才添加
+            if chunk.strip() and not all(c in '，,；;：:。！？.!?' for c in chunk.strip()):
+                chunks.append(chunk)
+
+            remaining = remaining[split_pos:]
+
+        if remaining:
+            if remaining.strip() and not all(c in '，,；;：:。！？.!?' for c in remaining.strip()):
+                chunks.append(remaining)
+
+        return chunks if chunks else [text]
 
     def _split_long_subtitle(
         self,
@@ -475,12 +541,18 @@ class IntelligentSubtitleSynchronizer:
         end_time: float,
         start_index: int
     ) -> List[SubtitleEntry]:
-        """拆分过长的字幕"""
+        """
+        拆分过长的字幕
+
+        改进策略：
+        1. 按所有标点符号拆分
+        2. 确保每段不超过 max_chars_per_subtitle 字
+        """
         subtitles = []
 
-        # 按逗号或空格拆分
+        # 按所有标点符号拆分
         import re
-        parts = re.split(r'([，,、；;])', text)
+        parts = re.split(r'([，,、；;：:。！？.!?])', text)
 
         # 合并标点
         segments = []
@@ -493,6 +565,16 @@ class IntelligentSubtitleSynchronizer:
 
         if not segments:
             segments = [text]
+
+        # 如果拆分后仍有超长片段，进一步按字数分割
+        final_segments = []
+        for seg in segments:
+            if len(seg) > self.max_chars_per_subtitle:
+                final_segments.extend(self._split_by_char_limit(seg, self.max_chars_per_subtitle))
+            else:
+                final_segments.append(seg)
+
+        segments = final_segments
 
         # 按比例分配时间
         total_chars = sum(len(s) for s in segments)

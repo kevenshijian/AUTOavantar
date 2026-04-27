@@ -32,6 +32,9 @@ class PreciseSubtitleSynchronizer:
     这是最可靠的方法，因为音频时长是已知的精确值。
     """
 
+    # 单条字幕最大字数（中文）
+    MAX_CHARS_PER_SUBTITLE = 12
+
     def __init__(
         self,
         padding_ms: int = 80,  # 字幕提前显示时间
@@ -200,18 +203,21 @@ class PreciseSubtitleSynchronizer:
 
     def _split_text_to_sentences(self, text: str) -> List[str]:
         """
-        将文本按句子拆分
+        将文本按标点符号拆分
 
-        优先按句号、问号、感叹号拆分
-        如果句子太长，再按逗号拆分
+        改进策略：
+        1. 按所有标点符号拆分（句末标点 + 逗号类标点）
+        2. 单条字幕限制为 MAX_CHARS_PER_SUBTITLE 字（默认12字）
+        3. 避免单独的标点符号成为一条字幕
         """
         import re
 
         if not text:
             return []
 
-        # 先按主要句末标点拆分
-        major_splits = re.split(r'([。！？.!?])', text)
+        # 按所有标点符号拆分（中英文标点）
+        # 包括：句末标点（。！？.!?）和逗号类标点（，,；;：:）
+        major_splits = re.split(r'([。！？.!?，,；;：:])', text)
 
         # 合并标点
         major_sentences = []
@@ -222,23 +228,19 @@ class PreciseSubtitleSynchronizer:
                 if major_splits[i].strip():
                     major_sentences.append(major_splits[i].strip())
 
-        # 如果句子太长（超过 max_subtitle_duration 对应的字符数），再拆分
-        # 假设平均语速每秒 4 字，max_subtitle_duration = 6s，最多 24 字
-        max_chars_per_subtitle = int(self.max_subtitle_duration * 4)
-
+        # 如果句子超过字数限制，进一步拆分
         final_sentences = []
         for sentence in major_sentences:
-            if len(sentence) <= max_chars_per_subtitle:
+            # 跳过只有标点符号的片段
+            if sentence.strip() and all(c in '，,；;：:。！？.!?' for c in sentence.strip()):
+                continue
+
+            if len(sentence) <= self.MAX_CHARS_PER_SUBTITLE:
                 final_sentences.append(sentence)
             else:
-                # 按逗号拆分
-                comma_splits = re.split(r'([，,；;：:])', sentence)
-                for j in range(0, len(comma_splits), 2):
-                    if j + 1 < len(comma_splits):
-                        final_sentences.append(comma_splits[j].strip() + comma_splits[j + 1])
-                    else:
-                        if comma_splits[j].strip():
-                            final_sentences.append(comma_splits[j].strip())
+                # 按字数限制拆分
+                chunks = self._split_by_char_limit(sentence, self.MAX_CHARS_PER_SUBTITLE)
+                final_sentences.extend(chunks)
 
         # 过滤空句子
         final_sentences = [s for s in final_sentences if s.strip()]
@@ -247,6 +249,47 @@ class PreciseSubtitleSynchronizer:
             final_sentences = [text.strip()]
 
         return final_sentences
+
+    def _split_by_char_limit(self, text: str, max_chars: int) -> List[str]:
+        """
+        按字数限制分割文本
+
+        策略：
+        1. 严格按字数限制分割，确保每段不超过 max_chars
+        2. 尽量在标点符号后分割，保留标点
+        3. 避免单独的标点符号成为一条字幕
+        """
+        if len(text) <= max_chars:
+            return [text]
+
+        chunks = []
+        remaining = text
+
+        while len(remaining) > max_chars:
+            # 默认在 max_chars 位置分割
+            split_pos = max_chars
+
+            # 尝试在 max_chars 位置附近找一个标点作为分割点
+            for i in range(min(max_chars, len(remaining)) - 1, max(0, max_chars - 5), -1):
+                if remaining[i] in '，,；;：:。！？.!?':
+                    split_pos = i + 1
+                    break
+
+            # 确保分割位置不超过 max_chars
+            split_pos = min(split_pos, max_chars)
+
+            chunk = remaining[:split_pos]
+            # 只有当 chunk 不只是标点符号时才添加
+            if chunk.strip() and not all(c in '，,；;：:。！？.!?' for c in chunk.strip()):
+                chunks.append(chunk)
+
+            remaining = remaining[split_pos:]
+
+        if remaining:
+            if remaining.strip() and not all(c in '，,；;：:。！？.!?' for c in remaining.strip()):
+                chunks.append(remaining)
+
+        return chunks if chunks else [text]
 
     def _write_srt(self, subtitles: List[SubtitleEntry], output_path: str):
         """写入 SRT 文件"""

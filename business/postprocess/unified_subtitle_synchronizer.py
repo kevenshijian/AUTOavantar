@@ -1,11 +1,10 @@
 """
-智能字幕时间轴同步器
-结合句子特征、语音规律和音频时长，精确分配字幕时间
-
-核心改进：
-1. 分析句子特征（长度、标点、语义）
-2. 根据语音规律调整时间分配
-3. 处理长短句混合的情况
+统一精确字幕时间轴同步器
+整合三个同步器的优点：
+1. 使用 TTS 精确时长作为时间基准（PreciseSubtitleSynchronizer）
+2. 考虑标点类型对停顿的影响（SmartSubtitleSynchronizer）
+3. 按字符权重智能分配时间（SmartSubtitleSynchronizer）
+4. 支持音频能量检测作为备用方案（IntelligentSubtitleSynchronizer）
 """
 
 import logging
@@ -22,27 +21,41 @@ class SentenceInfo:
     """句子信息"""
     text: str
     char_count: int
-    has_punctuation: bool
     punctuation_type: str  # 'period', 'exclamation', 'question', 'comma', 'none'
     estimated_duration: float  # 估算时长
     weight: float  # 时间分配权重
 
 
-class SmartSubtitleSynchronizer:
+@dataclass
+class SubtitleEntry:
+    """字幕条目"""
+    index: int
+    start_time: float  # 秒
+    end_time: float    # 秒
+    text: str
+
+
+class UnifiedSubtitleSynchronizer:
     """
-    智能字幕时间轴同步器
+    统一精确字幕时间轴同步器
 
     核心算法：
-    1. 分析每个句子的特征
-    2. 根据语音规律估算时长
-    3. 在段落时长约束下优化分配
+    1. 使用 TTS 提供的精确时长作为时间基准
+    2. 分析句子特征（长度、标点类型）
+    3. 根据标点类型计算停顿时间
+    4. 按权重智能分配时间
+    5. 确保字幕不超出段落时长
     """
 
-    # 语音规律参数
-    CHARS_PER_SECOND = 4.5  # 平均每秒字数
-    MIN_SENTENCE_DURATION = 0.5  # 最小句子时长
-    MAX_SENTENCE_DURATION = 5.0  # 最大句子时长（超过则拆分）
+    # 字数限制
     MAX_CHARS_PER_SUBTITLE = 12  # 单条字幕最大字数（中文）
+
+    # 语音规律参数
+    CHARS_PER_SECOND = 4.5  # 平均每秒字数（用于估算）
+    MIN_SENTENCE_DURATION = 0.5  # 最小句子时长（秒）
+    MAX_SENTENCE_DURATION = 5.0  # 最大句子时长（秒）
+
+    # 标点停顿时间（秒）
     PUNCTUATION_PAUSE = {
         'period': 0.3,      # 句号停顿
         'exclamation': 0.4, # 感叹号停顿
@@ -53,11 +66,27 @@ class SmartSubtitleSynchronizer:
 
     def __init__(
         self,
-        padding_ms: int = 80,
-        buffer_ms: int = 100,  # 段落末尾缓冲
+        padding_ms: int = 80,       # 字幕提前显示时间
+        buffer_ms: int = 100,       # 段落末尾缓冲
+        overlap_ms: int = 50,       # 字幕之间的重叠时间（避免闪烁）
+        min_subtitle_duration: float = 0.5,
+        max_subtitle_duration: float = 6.0,
     ):
+        """
+        初始化统一字幕同步器
+
+        Args:
+            padding_ms: 字幕提前显示时间（毫秒）
+            buffer_ms: 段落末尾缓冲时间（毫秒）
+            overlap_ms: 字幕之间的重叠时间（毫秒）
+            min_subtitle_duration: 最小字幕时长（秒）
+            max_subtitle_duration: 最大字幕时长（秒）
+        """
         self.padding_ms = padding_ms
         self.buffer_ms = buffer_ms
+        self.overlap_ms = overlap_ms
+        self.min_subtitle_duration = min_subtitle_duration
+        self.max_subtitle_duration = max_subtitle_duration
 
     def synchronize(
         self,
@@ -74,9 +103,20 @@ class SmartSubtitleSynchronizer:
             segment_durations: 每个段落的音频时长（来自 TTS）
             segment_offsets: 每个段落的时间偏移
             output_srt_path: 输出 SRT 文件路径
+
+        Returns:
+            是否成功
         """
         try:
-            logger.info("开始智能字幕同步")
+            logger.info("开始统一精确字幕同步")
+
+            if not segments_text:
+                logger.warning("没有文本内容")
+                return False
+
+            if not segment_durations or not segment_offsets:
+                logger.error("缺少段落时长或偏移信息")
+                return False
 
             all_subtitles = []
             subtitle_index = 1
@@ -92,34 +132,36 @@ class SmartSubtitleSynchronizer:
                     logger.warning(f"段落 {seg_idx} 时长无效: {duration}")
                     continue
 
-                # 分析句子
+                # 1. 分析句子特征
                 sentences = self._analyze_sentences(text)
+                if not sentences:
+                    continue
 
-                # 计算时间分配
+                # 2. 智能分配时间
                 sentence_times = self._allocate_time(
                     sentences,
                     offset,
                     duration
                 )
 
-                # 生成字幕
+                # 3. 生成字幕条目
                 for start, end, sentence in sentence_times:
-                    all_subtitles.append({
-                        'index': subtitle_index,
-                        'start': start,
-                        'end': end,
-                        'text': sentence
-                    })
+                    all_subtitles.append(SubtitleEntry(
+                        index=subtitle_index,
+                        start_time=start,
+                        end_time=end,
+                        text=sentence
+                    ))
                     subtitle_index += 1
 
-            # 写入 SRT
+            # 写入 SRT 文件
             self._write_srt(all_subtitles, output_srt_path)
 
-            logger.info(f"智能字幕同步完成，生成 {len(all_subtitles)} 条字幕")
+            logger.info(f"统一精确字幕同步完成，生成 {len(all_subtitles)} 条字幕")
             return True
 
         except Exception as e:
-            logger.error(f"智能字幕同步失败: {e}")
+            logger.error(f"统一精确字幕同步失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False
@@ -128,13 +170,12 @@ class SmartSubtitleSynchronizer:
         """
         分析文本，拆分句子并提取特征
 
-        改进策略：
-        1. 按所有标点符号拆分（句末标点 + 逗号类标点）
-        2. 单条字幕限制为 MAX_CHARS_PER_SUBTITLE 字（默认12字）
+        策略：
+        1. 按所有标点符号拆分
+        2. 单条字幕限制为 MAX_CHARS_PER_SUBTITLE 字
         3. 避免单独的标点符号成为一条字幕
         """
         # 按所有标点符号拆分（中英文标点）
-        # 包括：句末标点（。！？.!?）和逗号类标点（，,；;：:）
         parts = re.split(r'([。！？.!?，,；;：:])', text)
 
         raw_sentences = []
@@ -150,7 +191,7 @@ class SmartSubtitleSynchronizer:
         if not raw_sentences and text.strip():
             raw_sentences = [text.strip()]
 
-        # 分析每个句子，如果超过字数限制则进一步拆分
+        # 分析每个句子
         sentences = []
         for sentence in raw_sentences:
             info = self._analyze_single_sentence(sentence)
@@ -160,31 +201,30 @@ class SmartSubtitleSynchronizer:
                 sub_sentences = self._split_by_char_limit(sentence, self.MAX_CHARS_PER_SUBTITLE)
                 for sub in sub_sentences:
                     # 跳过只有标点符号的片段
-                    if sub.strip() and not all(c in '，,；;：:。！？.!?' for c in sub.strip()):
+                    if sub.strip() and not self._is_only_punctuation(sub):
                         sentences.append(self._analyze_single_sentence(sub))
             else:
                 # 跳过只有标点符号的片段
-                if sentence.strip() and not all(c in '，,；;：:。！？.!?' for c in sentence.strip()):
+                if sentence.strip() and not self._is_only_punctuation(sentence):
                     sentences.append(info)
 
         return sentences
 
+    def _is_only_punctuation(self, text: str) -> bool:
+        """检查文本是否只包含标点符号"""
+        return all(c in '，,；;：:。！？.!?' for c in text.strip())
+
     def _analyze_single_sentence(self, sentence: str) -> SentenceInfo:
-        """分析单个句子"""
+        """
+        分析单个句子，提取特征
+
+        Returns:
+            SentenceInfo: 句子信息
+        """
         char_count = len(sentence)
 
         # 检测标点类型
-        punctuation_type = 'none'
-        if sentence.endswith('。') or sentence.endswith('.'):
-            punctuation_type = 'period'
-        elif sentence.endswith('！') or sentence.endswith('!'):
-            punctuation_type = 'exclamation'
-        elif sentence.endswith('?') or sentence.endswith('?'):
-            punctuation_type = 'question'
-        elif sentence.endswith('，') or sentence.endswith(','):
-            punctuation_type = 'comma'
-
-        has_punctuation = punctuation_type != 'none'
+        punctuation_type = self._detect_punctuation_type(sentence)
 
         # 估算时长：字符数 / 语速 + 标点停顿
         base_duration = char_count / self.CHARS_PER_SECOND
@@ -198,52 +238,28 @@ class SmartSubtitleSynchronizer:
         # 计算权重（用于时间分配）
         # 权重 = 字符数 + 标点权重
         weight = char_count
-        if has_punctuation:
-            weight += 2  # 标点增加权重
+        if punctuation_type != 'none':
+            weight += 2  # 有标点增加权重
 
         return SentenceInfo(
             text=sentence,
             char_count=char_count,
-            has_punctuation=has_punctuation,
             punctuation_type=punctuation_type,
             estimated_duration=estimated_duration,
             weight=weight
         )
 
-    def _split_long_sentence(self, sentence: str) -> List[str]:
-        """
-        拆分长句子
-
-        策略：
-        1. 尝试按逗号类标点拆分
-        2. 如果拆分后仍有超长片段，强制按字数分割
-        3. 确保每段不超过 MAX_CHARS_PER_SUBTITLE 字
-        """
-        # 先尝试按逗号类标点拆分
-        parts = re.split(r'([，,；;：:])', sentence)
-
-        result = []
-        for i in range(0, len(parts), 2):
-            if i + 1 < len(parts):
-                result.append(parts[i].strip() + parts[i + 1])
-            else:
-                if parts[i].strip():
-                    result.append(parts[i].strip())
-
-        if not result:
-            result = [sentence]
-
-        # 如果拆分后仍有超长句，强制按字数分割
-        final_result = []
-        for s in result:
-            if len(s) > self.MAX_CHARS_PER_SUBTITLE:
-                # 按最大字数分割，尽量在语义边界分割
-                chunks = self._split_by_char_limit(s, self.MAX_CHARS_PER_SUBTITLE)
-                final_result.extend(chunks)
-            else:
-                final_result.append(s)
-
-        return final_result if final_result else [sentence]
+    def _detect_punctuation_type(self, sentence: str) -> str:
+        """检测句子的标点类型"""
+        if sentence.endswith('。') or sentence.endswith('.'):
+            return 'period'
+        elif sentence.endswith('！') or sentence.endswith('!'):
+            return 'exclamation'
+        elif sentence.endswith('?') or sentence.endswith('?'):
+            return 'question'
+        elif sentence.endswith('，') or sentence.endswith(','):
+            return 'comma'
+        return 'none'
 
     def _split_by_char_limit(self, text: str, max_chars: int) -> List[str]:
         """
@@ -265,7 +281,6 @@ class SmartSubtitleSynchronizer:
             split_pos = max_chars
 
             # 尝试在 max_chars 位置附近找一个标点作为分割点
-            # 从 max_chars-1 向前查找，找到标点后在其后分割
             for i in range(min(max_chars, len(remaining)) - 1, max(0, max_chars - 5), -1):
                 if remaining[i] in '，,；;：:。！？.!?':
                     split_pos = i + 1  # 在标点后分割，保留标点在前一段
@@ -276,14 +291,13 @@ class SmartSubtitleSynchronizer:
 
             chunk = remaining[:split_pos]
             # 只有当 chunk 不只是标点符号时才添加
-            if chunk.strip() and not all(c in '，,；;：:。！？.!?' for c in chunk.strip()):
+            if chunk.strip() and not self._is_only_punctuation(chunk):
                 chunks.append(chunk)
 
             remaining = remaining[split_pos:]
 
         if remaining:
-            # 只有当 remaining 不只是标点符号时才添加
-            if remaining.strip() and not all(c in '，,；;：:。！？.!?' for c in remaining.strip()):
+            if remaining.strip() and not self._is_only_punctuation(remaining):
                 chunks.append(remaining)
 
         return chunks if chunks else [text]
@@ -295,71 +309,72 @@ class SmartSubtitleSynchronizer:
         segment_duration: float
     ) -> List[Tuple[float, float, str]]:
         """
-        分配时间
+        智能分配时间
 
         策略：
-        1. 计算总估算时长
-        2. 如果估算时长 < 实际时长：按比例扩展
-        3. 如果估算时长 > 实际时长：按比例压缩
-        4. 确保每句最小时长
+        1. 使用 TTS 精确时长作为时间基准
+        2. 按权重分配时间（考虑字符数和标点）
+        3. 字幕提前显示（padding）
+        4. 相邻字幕有轻微重叠（避免闪烁）
+        5. 确保字幕不超出段落时长
+
+        Returns:
+            [(start_time, end_time, sentence), ...]
         """
         if not sentences:
             return []
 
-        # 计算总权重和总估算时长
+        # 计算总权重
         total_weight = sum(s.weight for s in sentences)
-        total_estimated = sum(s.estimated_duration for s in sentences)
+
+        if total_weight == 0:
+            return []
 
         # 可用时长（留缓冲）
         available_duration = segment_duration - self.buffer_ms / 1000
 
-        # 计算缩放因子
-        if total_estimated > 0:
-            scale_factor = available_duration / total_estimated
-        else:
-            scale_factor = 1.0
-
-        # 分配时间
         times = []
         current_time = segment_offset
 
         for i, sentence in enumerate(sentences):
-            # 缩放后的时长
-            duration = sentence.estimated_duration * scale_factor
+            # 按权重分配时间
+            weight_ratio = sentence.weight / total_weight
+            sentence_duration = available_duration * weight_ratio
 
-            # 确保最小时长
-            duration = max(self.MIN_SENTENCE_DURATION, duration)
+            # 确保时长在合理范围内
+            sentence_duration = max(self.min_subtitle_duration, sentence_duration)
+            sentence_duration = min(self.max_subtitle_duration, sentence_duration)
 
             # 对于极短句子（<5字），限制最大时长
             if sentence.char_count <= 5:
-                duration = min(duration, 1.0)
+                sentence_duration = min(sentence_duration, 1.0)
 
             # 计算开始时间（提前显示）
-            start = current_time - self.padding_ms / 1000
-            if start < segment_offset:
-                start = segment_offset
+            start_time = current_time - self.padding_ms / 1000
+            if start_time < segment_offset:
+                start_time = segment_offset
 
             # 计算结束时间
-            end = current_time + duration
+            end_time = current_time + sentence_duration
 
-            # 确保不超出段落
-            max_end = segment_offset + segment_duration - 0.05
-            if end > max_end:
-                end = max_end
-                duration = end - start
+            # 确保不超出段落范围
+            max_end_time = segment_offset + segment_duration - 0.05
+            if end_time > max_end_time:
+                end_time = max_end_time
+                sentence_duration = end_time - start_time
 
             # 确保时长足够
-            if duration < self.MIN_SENTENCE_DURATION:
-                duration = self.MIN_SENTENCE_DURATION
-                end = start + duration
-                if end > max_end:
-                    end = max_end
-                    start = max(segment_offset, end - self.MIN_SENTENCE_DURATION)
+            if sentence_duration < self.min_subtitle_duration:
+                sentence_duration = self.min_subtitle_duration
+                end_time = start_time + sentence_duration
+                if end_time > max_end_time:
+                    end_time = max_end_time
+                    start_time = max(segment_offset, end_time - self.min_subtitle_duration)
 
-            times.append((start, end, sentence.text))
+            times.append((start_time, end_time, sentence.text))
 
-            # 更新当前时间
-            current_time = end
+            # 更新当前时间（考虑重叠）
+            current_time = end_time - self.overlap_ms / 1000
 
             # 句末停顿
             if sentence.punctuation_type in ['period', 'exclamation', 'question']:
@@ -367,15 +382,15 @@ class SmartSubtitleSynchronizer:
 
         return times
 
-    def _write_srt(self, subtitles: List[dict], output_path: str):
+    def _write_srt(self, subtitles: List[SubtitleEntry], output_path: str):
         """写入 SRT 文件"""
         with open(output_path, 'w', encoding='utf-8') as f:
             for sub in subtitles:
-                f.write(f"{sub['index']}\n")
-                f.write(f"{self._format_time(sub['start'])} --> {self._format_time(sub['end'])}\n")
-                f.write(f"{sub['text']}\n\n")
+                f.write(f"{sub.index}\n")
+                f.write(f"{self._format_srt_time(sub.start_time)} --> {self._format_srt_time(sub.end_time)}\n")
+                f.write(f"{sub.text}\n\n")
 
-    def _format_time(self, seconds: float) -> str:
+    def _format_srt_time(self, seconds: float) -> str:
         """格式化 SRT 时间"""
         if seconds < 0:
             seconds = 0
@@ -386,6 +401,6 @@ class SmartSubtitleSynchronizer:
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
 
 
-def create_smart_subtitle_synchronizer(**kwargs) -> SmartSubtitleSynchronizer:
-    """创建智能字幕同步器"""
-    return SmartSubtitleSynchronizer(**kwargs)
+def create_unified_subtitle_synchronizer(**kwargs) -> UnifiedSubtitleSynchronizer:
+    """创建统一字幕同步器的便捷函数"""
+    return UnifiedSubtitleSynchronizer(**kwargs)

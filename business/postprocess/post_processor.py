@@ -395,26 +395,31 @@ class PostProcessor:
             logger.error(f"视频合并失败: {e}")
             return False
 
-    def _split_text_to_sentences(self, text: str) -> List[str]:
+    def _split_text_to_sentences(self, text: str, max_chars: int = 12) -> List[str]:
         """
-        将文本按句子拆分（一句话一个片段）
-        
+        将文本按标点符号拆分
+
+        改进策略：
+        1. 按所有标点符号拆分（句末标点 + 逗号类标点）
+        2. 单条字幕限制为 max_chars 字（默认12字）
+        3. 避免单独的标点符号成为一条字幕
+
         Args:
             text: 原始文本
-            
+            max_chars: 单条字幕最大字数
+
         Returns:
             句子列表
         """
         import re
-        
+
         if not text:
             return []
-        
-        # 按多种标点符号拆分句子（中英文标点都支持）
-        # 匹配：。！？.!?；；：:，,
-        # 使用更全面的标点符号列表确保每句话都被正确拆分
-        sentences = re.split(r'([。！？.!?；；：:，,])', text)
-        
+
+        # 按所有标点符号拆分（中英文标点）
+        # 包括：句末标点（。！？.!?）和逗号类标点（，,；;：:）
+        sentences = re.split(r'([。！？.!?，,；;：:])', text)
+
         # 合并标点符号和句子
         result = []
         for i in range(0, len(sentences), 2):
@@ -422,15 +427,68 @@ class PostProcessor:
                 sentence = sentences[i].strip() + sentences[i + 1].strip()
             else:
                 sentence = sentences[i].strip()
-            
+
             if sentence:
-                result.append(sentence)
-        
+                # 跳过只有标点符号的片段
+                if all(c in '，,；;：:。！？.!?' for c in sentence.strip()):
+                    continue
+
+                # 如果句子超过字数限制，进一步拆分
+                if len(sentence) > max_chars:
+                    sub_sentences = self._split_by_char_limit(sentence, max_chars)
+                    result.extend(sub_sentences)
+                else:
+                    result.append(sentence)
+
         # 如果没有拆分出句子，返回原文本作为一个句子
         if not result and text.strip():
-            result = [text.strip()]
-        
+            if len(text.strip()) > max_chars:
+                result = self._split_by_char_limit(text.strip(), max_chars)
+            else:
+                result = [text.strip()]
+
         return result
+
+    def _split_by_char_limit(self, text: str, max_chars: int) -> List[str]:
+        """
+        按字数限制分割文本
+
+        策略：
+        1. 严格按字数限制分割，确保每段不超过 max_chars
+        2. 尽量在标点符号后分割，保留标点
+        3. 避免单独的标点符号成为一条字幕
+        """
+        if len(text) <= max_chars:
+            return [text]
+
+        chunks = []
+        remaining = text
+
+        while len(remaining) > max_chars:
+            # 默认在 max_chars 位置分割
+            split_pos = max_chars
+
+            # 尝试在 max_chars 位置附近找一个标点作为分割点
+            for i in range(min(max_chars, len(remaining)) - 1, max(0, max_chars - 5), -1):
+                if remaining[i] in '，,；;：:。！？.!?':
+                    split_pos = i + 1
+                    break
+
+            # 确保分割位置不超过 max_chars
+            split_pos = min(split_pos, max_chars)
+
+            chunk = remaining[:split_pos]
+            # 只有当 chunk 不只是标点符号时才添加
+            if chunk.strip() and not all(c in '，,；;：:。！？.!?' for c in chunk.strip()):
+                chunks.append(chunk)
+
+            remaining = remaining[split_pos:]
+
+        if remaining:
+            if remaining.strip() and not all(c in '，,；;：:。！？.!?' for c in remaining.strip()):
+                chunks.append(remaining)
+
+        return chunks if chunks else [text]
 
     def _add_subtitle(
         self,
@@ -470,13 +528,17 @@ class PostProcessor:
                 logger.warning("没有文本内容，跳过字幕生成")
                 return None
 
-            # 使用智能字幕同步器
-            # 结合句子特征、语音规律和音频时长，精确分配字幕时间
-            from business.postprocess.smart_subtitle_synchronizer import SmartSubtitleSynchronizer
+            # 使用统一精确字幕同步器
+            # 整合了三个同步器的优点：
+            # 1. 使用 TTS 精确时长作为时间基准
+            # 2. 考虑标点类型对停顿的影响
+            # 3. 按权重智能分配时间
+            from business.postprocess.unified_subtitle_synchronizer import UnifiedSubtitleSynchronizer
 
-            synchronizer = SmartSubtitleSynchronizer(
-                padding_ms=80,  # 字幕提前 80ms 显示
-                buffer_ms=100,  # 段落末尾缓冲
+            synchronizer = UnifiedSubtitleSynchronizer(
+                padding_ms=80,      # 字幕提前 80ms 显示
+                buffer_ms=100,      # 段落末尾缓冲
+                overlap_ms=50,      # 字幕重叠，避免闪烁
             )
 
             success = synchronizer.synchronize(
