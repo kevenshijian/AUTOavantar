@@ -66,7 +66,7 @@
           <template #header>
             <div class="card-header">
               <el-icon><Document /></el-icon>
-              <span>提示词模版配置</span>
+              <span>模版配置</span>
             </div>
           </template>
 
