@@ -185,22 +185,22 @@ class HeyGemClient:
     def cleanup_gpu(self):
         """
         触发 HeyGem 服务的 GPU 显存清理（工作流所有任务完成后调用）
-        调用 /api/cleanup/gpu 端点执行 torch.cuda.empty_cache() + gc.collect()
+        调用 /api/v1/gpu/release 端点释放显存
         
         注意：不要在每个 generate_video 后自动调用，因为 cy_app 内部使用
         multiprocessing，过于频繁的 gc.collect 会破坏子进程的共享状态。
         应在工作流级别，所有视频段落生成完毕后调用一次。
         """
         try:
-            cleanup_url = f"{self.host}/api/cleanup/gpu"
-            resp = self.session.post(cleanup_url, timeout=10)
+            cleanup_url = f"{self.host}/api/v1/gpu/release"
+            resp = self.session.post(cleanup_url, timeout=30)
             if resp.status_code == 200:
                 data = resp.json()
-                logger.info(f"[GPU Cleanup] 清理成功: allocated={data.get('allocated_mb', '?')}MB reserved={data.get('reserved_mb', '?')}MB")
+                logger.info(f"[GPU Cleanup] HeyGem 显存释放成功: released={data.get('released_models', [])}")
             else:
-                logger.debug(f"[GPU Cleanup] 清理端点返回非200: {resp.status_code}")
+                logger.warning(f"[GPU Cleanup] HeyGem 显存释放失败: {resp.status_code} - {resp.text}")
         except requests.RequestException as e:
-            logger.debug(f"[GPU Cleanup] 清理请求失败（不影响主流程）: {e}")
+            logger.warning(f"[GPU Cleanup] HeyGem 显存释放请求失败: {e}")
 
     def close(self):
         """

@@ -37,11 +37,17 @@ class ServerSettings(BaseSettings):
 class ModelSettings(BaseSettings):
     """模型配置"""
 
+    model_config = SettingsConfigDict(
+        extra="ignore",
+        populate_by_name=True,
+    )
+
     cfg_path: str = Field("checkpoints/config.yaml", description="模型配置文件路径")
     model_dir: str = Field("checkpoints", description="模型权重目录")
     is_fp16: bool = Field(True, description="FP16 混合精度推理")
     device: Optional[str] = Field(None, description="推理设备，None 自动检测")
     use_cuda_kernel: Optional[bool] = Field(None, description="BigVGAN CUDA kernel")
+    lazyload: bool = Field(False, description="延迟加载：启动时不加载模型，首次请求时加载")
 
 
 class InferenceSettings(BaseSettings):

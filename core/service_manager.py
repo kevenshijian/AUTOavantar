@@ -154,6 +154,9 @@ def build_service_env() -> Dict[str, str]:
     env["HF_HUB_OFFLINE"] = "1"
     env["TRANSFORMERS_OFFLINE"] = "1"
     
+    # IndexTTS 延迟加载：启动时不加载模型，首次请求时加载
+    env["INDEXTTS_API_MODEL_LAZYLOAD"] = "true"
+    
     return env
 
 
@@ -191,7 +194,7 @@ class ServiceManager:
         # HeyGem 服务配置
         self._services["heygem"] = ManagedService(
             name="heygem",
-            health_url="http://localhost:9889",
+            health_url="http://localhost:9889/api/v1/gpu/status",
             start_command=[python_exe, "app.py"],
             working_dir=os.path.join(base_dir, "heygem-win-50-onnx"),
             ready_timeout=60.0

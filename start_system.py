@@ -90,6 +90,8 @@ def setup_environment(base_dir: Path) -> dict:
     env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
     env["HF_HUB_OFFLINE"] = "1"
     env["TRANSFORMERS_OFFLINE"] = "1"
+    env["HEYGEM_API_ONLY"] = "true"
+    env["INDEXTTS_API_MODEL_LAZYLOAD"] = "true"
 
     return env
 

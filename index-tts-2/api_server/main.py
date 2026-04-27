@@ -71,26 +71,39 @@ async def lifespan(app: FastAPI):
     _audio_speed_service = AudioSpeedService(output_dir=settings.get_temp_dir())
     logger.info("音频语速调节服务初始化成功")
 
-    # 初始化 TTS 引擎（异步加载，在后台线程中执行）
+    # 初始化 TTS 引擎
     _engine = TTSEngine()
 
-    def _load_engine():
-        logger.info("开始加载 TTS 模型（后台线程）...")
-        try:
-            _engine.load_model(
-                cfg_path=settings.get_model_cfg_path(),
-                model_dir=settings.get_model_dir(),
-                is_fp16=settings.model.is_fp16,
-                device=settings.model.device,
-                use_cuda_kernel=settings.model.use_cuda_kernel,
-            )
-            logger.info("TTS 模型加载完成")
-        except Exception as e:
-            logger.error(f"TTS 模型加载失败: {e}", exc_info=True)
-            raise
+    # 根据配置决定是否延迟加载
+    if settings.model.lazyload:
+        # 延迟加载模式：只保存参数，不加载模型
+        logger.info("延迟加载模式：启动时不加载模型，首次请求时自动加载")
+        _engine.set_load_params(
+            cfg_path=settings.get_model_cfg_path(),
+            model_dir=settings.get_model_dir(),
+            is_fp16=settings.model.is_fp16,
+            device=settings.model.device,
+            use_cuda_kernel=settings.model.use_cuda_kernel,
+        )
+        load_task = None
+    else:
+        # 立即加载模式：在后台线程中加载模型
+        def _load_engine():
+            logger.info("开始加载 TTS 模型（后台线程）...")
+            try:
+                _engine.load_model(
+                    cfg_path=settings.get_model_cfg_path(),
+                    model_dir=settings.get_model_dir(),
+                    is_fp16=settings.model.is_fp16,
+                    device=settings.model.device,
+                    use_cuda_kernel=settings.model.use_cuda_kernel,
+                )
+                logger.info("TTS 模型加载完成")
+            except Exception as e:
+                logger.error(f"TTS 模型加载失败: {e}", exc_info=True)
+                raise
 
-    # 在后台线程中加载模型
-    load_task = asyncio.get_event_loop().run_in_executor(None, _load_engine)
+        load_task = asyncio.get_event_loop().run_in_executor(None, _load_engine)
 
     # 将服务实例注入路由
     from api_server.routers import system as system_router
@@ -100,8 +113,9 @@ async def lifespan(app: FastAPI):
 
     system_router.set_services(_engine, None, settings, _audio_service, _emotion_service)
 
-    # 初始化任务队列（模型加载完成后启动）
-    await load_task
+    # 等待模型加载完成（仅立即加载模式）
+    if load_task:
+        await load_task
 
     _task_queue = TaskQueue(
         engine=_engine,

@@ -106,6 +106,7 @@ async def health():
     返回模型加载状态、GPU 详细信息、队列信息、任务统计、情绪服务状态等。
     """
     model_loaded = _engine.is_loaded if _engine else False
+    lazy_load = _engine._lazy_load if _engine else False
 
     # 模型设备信息
     model_device = None
@@ -123,7 +124,13 @@ async def health():
     if _emotion_service is not None:
         emotion_available = _emotion_service.available
 
-    status = "ready" if model_loaded else "loading"
+    # 延迟加载模式下，服务已就绪（即使模型未加载）
+    if lazy_load and not model_loaded:
+        status = "ready"
+    elif model_loaded:
+        status = "ready"
+    else:
+        status = "loading"
 
     return HealthResponse(
         status=status,

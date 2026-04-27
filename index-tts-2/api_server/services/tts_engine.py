@@ -29,6 +29,33 @@ class TTSEngine:
         self._device = None
         self._is_fp16 = False
         self._load_params = None  # 保存加载参数，用于卸载后自动重载
+        self._lazy_load = False  # 延迟加载模式
+
+    def set_load_params(
+        self,
+        cfg_path,
+        model_dir,
+        is_fp16=True,
+        device=None,
+        use_cuda_kernel=None,
+    ):
+        """
+        设置模型加载参数但不加载模型（延迟加载模式）。
+
+        用于启动时不占用显存，首次推理时才加载模型的场景。
+        """
+        self._load_params = {
+            "cfg_path": cfg_path,
+            "model_dir": model_dir,
+            "is_fp16": is_fp16,
+            "device": device,
+            "use_cuda_kernel": use_cuda_kernel,
+        }
+        self._is_fp16 = is_fp16
+        self._device = device
+        self._lazy_load = True
+        self._loaded = False
+        logger.info("TTS 引擎已设置延迟加载参数，模型将在首次请求时加载")
 
     def load_model(
         self,
@@ -56,6 +83,7 @@ class TTSEngine:
         self._is_fp16 = is_fp16
         self._device = device
         self._loaded = True
+        self._lazy_load = False
 
         # 保存加载参数，用于卸载后自动重载
         self._load_params = {
