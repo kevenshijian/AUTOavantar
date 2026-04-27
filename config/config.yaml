@@ -20,7 +20,7 @@ llm:
   api_key: "your-api-key-here"
 
   # 模型名称
-  model: "deepseek-chat"
+  model: "deepseek-v4-flash"
 
   # API 基础地址（可选）
   api_base: "https://api.deepseek.com/v1"

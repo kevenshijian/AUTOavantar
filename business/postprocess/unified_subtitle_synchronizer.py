@@ -269,8 +269,30 @@ class UnifiedSubtitleSynchronizer:
         1. 严格按字数限制分割，确保每段不超过 max_chars
         2. 尽量在标点符号后分割，保留标点
         3. 避免单独的标点符号成为一条字幕
+        4. 若切分后剩余字数少于3字，则不切分（避免出现极短字幕）
         """
         if len(text) <= max_chars:
+            return [text]
+
+        # 检查是否需要分割：如果分割后剩余字数少于3字，则不分割
+        # 找到最佳分割点
+        best_split_pos = max_chars
+
+        # 尝试在 max_chars 位置附近找一个标点作为分割点
+        for i in range(min(max_chars, len(text)) - 1, max(0, max_chars - 5), -1):
+            if text[i] in '，,；;：:。！？.!?':
+                best_split_pos = i + 1  # 在标点后分割，保留标点在前一段
+                break
+
+        # 确保分割位置不超过 max_chars
+        best_split_pos = min(best_split_pos, max_chars)
+
+        # 计算分割后剩余的字数
+        remaining_chars = len(text) - best_split_pos
+
+        # 如果剩余字数少于3字，则不分割，直接返回原文（即使超过限制）
+        # 这样可以避免出现如 "12字 + 2字" 这样的极端情况
+        if remaining_chars < 3:
             return [text]
 
         chunks = []
@@ -289,6 +311,13 @@ class UnifiedSubtitleSynchronizer:
             # 确保分割位置不超过 max_chars
             split_pos = min(split_pos, max_chars)
 
+            # 计算分割后剩余的字数
+            next_remaining_chars = len(remaining) - split_pos
+
+            # 如果分割后剩余字数少于3字，则停止分割
+            if next_remaining_chars < 3:
+                break
+
             chunk = remaining[:split_pos]
             # 只有当 chunk 不只是标点符号时才添加
             if chunk.strip() and not self._is_only_punctuation(chunk):
@@ -296,9 +325,35 @@ class UnifiedSubtitleSynchronizer:
 
             remaining = remaining[split_pos:]
 
+        # 处理剩余部分
         if remaining:
             if remaining.strip() and not self._is_only_punctuation(remaining):
-                chunks.append(remaining)
+                # 如果剩余部分超过 max_chars 且 chunks 为空，需要强制处理
+                if len(remaining) > max_chars and not chunks:
+                    # 这种情况下，尽量找一个合理的分割点
+                    # 找到剩余部分中最后一个标点位置
+                    last_punct_pos = -1
+                    for i in range(len(remaining) - 1, -1, -1):
+                        if remaining[i] in '，,；;：:。！？.!?':
+                            last_punct_pos = i + 1
+                            break
+
+                    if last_punct_pos > 3 and last_punct_pos <= max_chars:
+                        # 可以在标点处分割
+                        chunks.append(remaining[:last_punct_pos])
+                        remaining = remaining[last_punct_pos:]
+                        if remaining.strip() and not self._is_only_punctuation(remaining):
+                            chunks.append(remaining)
+                    else:
+                        # 无法合理分割，直接返回整个剩余部分
+                        chunks.append(remaining)
+                elif len(remaining) > max_chars:
+                    # 已经有 chunks 了，剩余部分超长
+                    # 继续尝试分割
+                    sub_chunks = self._split_by_char_limit(remaining, max_chars)
+                    chunks.extend(sub_chunks)
+                else:
+                    chunks.append(remaining)
 
         return chunks if chunks else [text]
 
