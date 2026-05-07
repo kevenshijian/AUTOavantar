@@ -1,63 +1,61 @@
 <template>
   <div class="dashboard-container" :class="{ 'dark-theme': isDarkTheme }">
     <div class="dashboard-content">
-      <div class="section-top">
-        <div class="action-panel">
-          <el-card class="action-card" shadow="hover" @click="createTask">
-            <div class="action-icon new">
-              <el-icon><Plus /></el-icon>
-            </div>
-            <div class="action-text">
-              <h3>新建任务</h3>
-              <p>创建数字人视频生成任务</p>
-            </div>
-            <div class="action-arrow">
-              <el-icon><ArrowRight /></el-icon>
-            </div>
-          </el-card>
-          
-          <el-card class="action-card run" shadow="hover" @click="runAllPending">
-            <div class="action-icon running">
-              <el-icon><VideoPlay /></el-icon>
-            </div>
-            <div class="action-text">
-              <h3>运行任务</h3>
-              <p>执行所有等待中的任务</p>
-            </div>
-            <div class="action-arrow">
-              <el-icon><ArrowRight /></el-icon>
-            </div>
-          </el-card>
-        </div>
+      <div class="action-buttons-row">
+        <button class="action-button create-btn" @click="createTask">
+          <div class="btn-icon">
+            <el-icon><Plus /></el-icon>
+          </div>
+          <div class="btn-content">
+            <span class="btn-title">新建任务</span>
+            <span class="btn-desc">创建数字人视频生成任务</span>
+          </div>
+          <div class="btn-arrow">
+            <el-icon><ArrowRight /></el-icon>
+          </div>
+        </button>
+        
+        <button class="action-button run-btn" @click="runAllPending">
+          <div class="btn-icon">
+            <el-icon><VideoPlay /></el-icon>
+          </div>
+          <div class="btn-content">
+            <span class="btn-title">运行任务</span>
+            <span class="btn-desc">执行所有等待中的任务</span>
+          </div>
+          <div class="btn-arrow">
+            <el-icon><ArrowRight /></el-icon>
+          </div>
+        </button>
+      </div>
 
-        <div class="pending-panel">
-          <div class="panel-header">
-            <h4><el-icon><Clock /></el-icon> 等待运行</h4>
-            <span class="count-badge">{{ pendingTasks.length }}</span>
-          </div>
-          <div class="task-list" v-if="pendingTasks.length > 0">
-            <div 
-              v-for="task in pendingTasks" 
-              :key="task.task_id"
-              class="task-item"
-            >
-              <div class="task-info">
-                <span class="task-name">{{ task.name }}</span>
-                <span class="task-time">{{ formatTime(task.created_at) }}</span>
-              </div>
-              <div class="task-actions">
-                <el-button type="success" size="small" @click="startTask(task)">
-                  <el-icon><VideoPlay /></el-icon>
-                  开始
-                </el-button>
-                <el-button type="danger" size="small" plain @click="deleteTask(task)">
-                  <el-icon><Delete /></el-icon>
-                </el-button>
-              </div>
+      <div class="pending-panel">
+        <div class="panel-header">
+          <h4><el-icon><Clock /></el-icon> 等待运行</h4>
+          <span class="count-badge">{{ pendingTasks.length }}</span>
+        </div>
+        <div class="pending-grid" v-if="pendingTasks.length > 0">
+          <div
+            v-for="task in pendingTasks"
+            :key="task.task_id"
+            class="pending-card"
+          >
+            <div class="pending-header">
+              <span class="task-name">{{ task.name }}</span>
+              <span class="task-time">{{ formatTime(task.created_at) }}</span>
+            </div>
+            <div class="pending-actions">
+              <el-button type="success" size="small" @click="startTask(task)">
+                <el-icon><VideoPlay /></el-icon>
+                开始
+              </el-button>
+              <el-button type="danger" size="small" plain @click="deleteTask(task)">
+                <el-icon><Delete /></el-icon>
+              </el-button>
             </div>
           </div>
-          <el-empty v-else description="暂无等待任务" :image-size="60" />
         </div>
+        <el-empty v-else description="暂无等待任务" :image-size="60" />
       </div>
 
       <div class="section-middle" v-if="activeTasks.length > 0">
@@ -172,7 +170,7 @@
 import { ref, computed, onMounted, onUnmounted, inject } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTaskStore } from '@/stores/taskStore'
-import { taskApi } from '@/services/api'
+import { taskApi, functionsApi } from '@/services/api'
 import { ElMessage } from 'element-plus'
 import websocketService from '@/services/websocket'
 
@@ -195,13 +193,26 @@ const queuedTasks = computed(() =>
   allTasks.value.filter(t => t.status === 'queued')
 )
 
-const runningTasks = computed(() => 
+const runningTasks = computed(() =>
   allTasks.value.filter(t => t.status === 'processing' || t.status === 'running')
 )
 
-const activeTasks = computed(() => 
-  [...queuedTasks.value, ...runningTasks.value]
-)
+// 运行中任务排在最顶部，排队任务按优先级向下排序
+const activeTasks = computed(() => {
+  // 运行中的任务排在最顶部
+  const running = runningTasks.value
+
+  // 排队任务按优先级排序（插队任务在前）
+  const queued = [...queuedTasks.value].sort((a, b) => {
+    // 有 is_priority 标记的排在前面
+    if (a.is_priority && !b.is_priority) return -1
+    if (!a.is_priority && b.is_priority) return 1
+    // 都没有或都有时按创建时间排序
+    return new Date(a.created_at) - new Date(b.created_at)
+  })
+
+  return [...running, ...queued]
+})
 
 const completedTasks = computed(() => 
   allTasks.value.filter(t => t.status === 'completed' || t.status === 'failed')
@@ -302,15 +313,12 @@ const closePreview = () => {
   previewUrl.value = ''
 }
 
-const downloadTask = (task) => {
-  if (task.output_path) {
-    const url = getVideoUrl(task.output_path)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = task.output_path.split('/').pop() || 'video.mp4'
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
+const downloadTask = async (task) => {
+  try {
+    await functionsApi.openOutputDir()
+    ElMessage.success('输出目录已打开')
+  } catch (error) {
+    ElMessage.error('打开输出目录失败: ' + (error.message || '未知错误'))
   }
 }
 
@@ -377,158 +385,217 @@ onUnmounted(() => {
   padding: 20px;
 }
 
-.section-top {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+.action-buttons-row {
+  display: flex;
   gap: 20px;
   margin-bottom: 20px;
 }
 
-.action-panel {
-  flex: 0 0 35%;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.action-card {
+.action-button {
+  flex: 1;
   display: flex;
   align-items: center;
-  padding: 24px;
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  padding: 20px 28px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.85));
+  border: 2px solid transparent;
   border-radius: 16px;
   cursor: pointer;
-  transition: all 0.3s ease;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  position: relative;
+  overflow: hidden;
 }
 
-.dark-theme .action-card {
-  background: rgba(255, 255, 255, 0.03);
-  border-color: rgba(255, 255, 255, 0.08);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+.action-button::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, transparent 0%, rgba(255, 255, 255, 0.2) 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
 }
 
-.action-card:hover {
-  background: rgba(255, 255, 255, 1);
-  transform: translateX(8px);
+.action-button:hover::before {
+  opacity: 1;
+}
+
+.dark-theme .action-button {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.action-button:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
+}
+
+.dark-theme .action-button:hover {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.create-btn {
   border-color: rgba(64, 158, 255, 0.3);
 }
 
-.dark-theme .action-card:hover {
-  background: rgba(255, 255, 255, 0.06);
+.create-btn:hover {
+  border-color: rgba(64, 158, 255, 0.6);
+  box-shadow: 0 12px 32px rgba(64, 158, 255, 0.2);
+}
+
+.dark-theme .create-btn {
   border-color: rgba(0, 217, 255, 0.3);
 }
 
-.action-card.run:hover {
+.dark-theme .create-btn:hover {
+  border-color: rgba(0, 217, 255, 0.6);
+  box-shadow: 0 12px 32px rgba(0, 217, 255, 0.25);
+}
+
+.run-btn {
+  border-color: rgba(103, 194, 58, 0.3);
+}
+
+.run-btn:hover {
+  border-color: rgba(103, 194, 58, 0.6);
+  box-shadow: 0 12px 32px rgba(103, 194, 58, 0.2);
+}
+
+.dark-theme .run-btn {
   border-color: rgba(0, 255, 136, 0.3);
 }
 
-.action-icon {
-  width: 56px;
-  height: 56px;
+.dark-theme .run-btn:hover {
+  border-color: rgba(0, 255, 136, 0.6);
+  box-shadow: 0 12px 32px rgba(0, 255, 136, 0.25);
+}
+
+.btn-icon {
+  width: 52px;
+  height: 52px;
   border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-right: 20px;
+  margin-right: 18px;
+  transition: all 0.3s ease;
 }
 
-.action-icon.new {
-  background: linear-gradient(135deg, rgba(64, 158, 255, 0.2), rgba(64, 158, 255, 0.05));
-  border: 1px solid rgba(64, 158, 255, 0.3);
+.create-btn .btn-icon {
+  background: linear-gradient(135deg, rgba(64, 158, 255, 0.15), rgba(64, 158, 255, 0.05));
 }
 
-.dark-theme .action-icon.new {
+.dark-theme .create-btn .btn-icon {
   background: linear-gradient(135deg, rgba(0, 217, 255, 0.2), rgba(0, 217, 255, 0.05));
-  border-color: rgba(0, 217, 255, 0.3);
 }
 
-.action-icon.new .el-icon {
-  font-size: 28px;
+.run-btn .btn-icon {
+  background: linear-gradient(135deg, rgba(103, 194, 58, 0.15), rgba(103, 194, 58, 0.05));
+}
+
+.dark-theme .run-btn .btn-icon {
+  background: linear-gradient(135deg, rgba(0, 255, 136, 0.2), rgba(0, 255, 136, 0.05));
+}
+
+.btn-icon .el-icon {
+  font-size: 26px;
+  transition: all 0.3s ease;
+}
+
+.create-btn .btn-icon .el-icon {
   color: #409EFF;
 }
 
-.dark-theme .action-icon.new .el-icon {
+.dark-theme .create-btn .btn-icon .el-icon {
   color: #00d9ff;
 }
 
-.action-icon.running {
-  background: linear-gradient(135deg, rgba(103, 194, 58, 0.2), rgba(103, 194, 58, 0.05));
-  border: 1px solid rgba(103, 194, 58, 0.3);
-}
-
-.dark-theme .action-icon.running {
-  background: linear-gradient(135deg, rgba(0, 255, 136, 0.2), rgba(0, 255, 136, 0.05));
-  border-color: rgba(0, 255, 136, 0.3);
-}
-
-.action-icon.running .el-icon {
-  font-size: 28px;
+.run-btn .btn-icon .el-icon {
   color: #67c23a;
 }
 
-.dark-theme .action-icon.running .el-icon {
+.dark-theme .run-btn .btn-icon .el-icon {
   color: #00ff88;
 }
 
-.action-text {
-  flex: 1;
+.action-button:hover .btn-icon {
+  transform: scale(1.1);
 }
 
-.action-text h3 {
-  margin: 0 0 4px 0;
+.btn-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.btn-title {
   font-size: 18px;
   font-weight: 600;
   color: #303133;
+  letter-spacing: 0.5px;
   transition: color 0.3s ease;
 }
 
-.dark-theme .action-text h3 {
+.dark-theme .btn-title {
   color: #fff;
 }
 
-.action-text p {
-  margin: 0;
+.btn-desc {
   font-size: 13px;
   color: rgba(0, 0, 0, 0.5);
   transition: color 0.3s ease;
 }
 
-.dark-theme .action-text p {
+.dark-theme .btn-desc {
   color: rgba(255, 255, 255, 0.5);
 }
 
-.action-arrow {
+.btn-arrow {
   opacity: 0;
-  transition: all 0.3s;
+  transform: translateX(-8px);
+  transition: all 0.3s ease;
 }
 
-.action-card:hover .action-arrow {
+.action-button:hover .btn-arrow {
   opacity: 1;
-  transform: translateX(4px);
+  transform: translateX(0);
 }
 
-.action-arrow .el-icon {
-  font-size: 20px;
-  color: #409EFF;
+.btn-arrow .el-icon {
+  font-size: 22px;
   transition: color 0.3s ease;
 }
 
-.dark-theme .action-arrow .el-icon {
+.create-btn .btn-arrow .el-icon {
+  color: #409EFF;
+}
+
+.dark-theme .create-btn .btn-arrow .el-icon {
   color: #00d9ff;
 }
 
+.run-btn .btn-arrow .el-icon {
+  color: #67c23a;
+}
+
+.dark-theme .run-btn .btn-arrow .el-icon {
+  color: #00ff88;
+}
+
 .pending-panel {
-  flex: 1;
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 16px;
   padding: 20px;
-  max-height: 280px;
+  max-height: 320px;
   overflow-y: auto;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
   transition: all 0.3s ease;
+  margin-bottom: 20px;
 }
 
 .dark-theme .pending-panel {
@@ -600,6 +667,75 @@ onUnmounted(() => {
 
 .dark-theme .count-badge.completed {
   background: linear-gradient(135deg, #a29bfe, #6c5ce7);
+}
+
+.pending-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.pending-card {
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 10px;
+  padding: 14px 16px;
+  transition: all 0.2s;
+}
+
+.dark-theme .pending-card {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.pending-card:hover {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(103, 194, 58, 0.3);
+  box-shadow: 0 4px 12px rgba(103, 194, 58, 0.15);
+}
+
+.dark-theme .pending-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(0, 255, 136, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 255, 136, 0.15);
+}
+
+.pending-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.pending-header .task-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #303133;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}
+
+.dark-theme .pending-header .task-name {
+  color: #fff;
+}
+
+.pending-header .task-time {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.4);
+  flex-shrink: 0;
+}
+
+.dark-theme .pending-header .task-time {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.pending-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .task-list {
@@ -1028,24 +1164,50 @@ onUnmounted(() => {
   .completed-grid {
     grid-template-columns: repeat(3, 1fr);
   }
-  
+
   .running-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pending-grid {
     grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 900px) {
-  .section-top {
+@media (max-width: 768px) {
+  .action-buttons-row {
     flex-direction: column;
   }
   
-  .action-panel {
-    flex: none;
-    width: 100%;
+  .action-button {
+    padding: 16px 20px;
+  }
+  
+  .btn-icon {
+    width: 44px;
+    height: 44px;
+  }
+  
+  .btn-icon .el-icon {
+    font-size: 22px;
+  }
+  
+  .btn-title {
+    font-size: 16px;
+  }
+  
+  .btn-desc {
+    font-size: 12px;
   }
   
   .completed-grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .completed-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

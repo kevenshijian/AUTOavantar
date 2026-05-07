@@ -18,7 +18,8 @@ logger = logging.getLogger("autoavantar-api.settings")
 router = APIRouter()  # 移除 prefix，在 main.py 中统一配置
 
 
-CONFIG_DIR = "config"
+# 使用绝对路径确保配置目录正确（backend/config 相对于项目根目录）
+CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "config"))
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -34,21 +35,14 @@ def get_cache_dirs() -> List[str]:
     cache_dirs = [
         PROJECT_ROOT / "tmp",
         PROJECT_ROOT / "temp",
-        PROJECT_ROOT / "output",
-        PROJECT_ROOT / "index-tts-2" / "outputs",
-        PROJECT_ROOT / "index-tts-2" / "tmp",
-        PROJECT_ROOT / "heygem-win-50-onnx" / "生成结果",
-        PROJECT_ROOT / "heygem-win-50-onnx" / "log",
-        PROJECT_ROOT / "heygem-win-50-onnx" / "output",
-        PROJECT_ROOT / "heygem-win-50-onnx" / "save",
-        PROJECT_ROOT / "heygem-win-50-onnx" / "temp",
-        PROJECT_ROOT / "heygem-win-50-onnx" / "tmp",
-        PROJECT_ROOT / "heygem-win-50-onnx" / "change",
+        PROJECT_ROOT / "output" / "temp",
         PROJECT_ROOT / "backend" / "tmp",
         PROJECT_ROOT / "backend" / "temp",
-        PROJECT_ROOT / "backend" / "output" / "temp",
+        PROJECT_ROOT / "backend" / "output",
         PROJECT_ROOT / "backend" / "logs",
         PROJECT_ROOT / "backend" / "uploads",
+        PROJECT_ROOT / "engines" / "heygem" / "result",
+        PROJECT_ROOT / "engines" / "heygem" / "temp",
     ]
     
     return [str(d) for d in cache_dirs if d.exists()]
@@ -106,8 +100,6 @@ class ApiKeysRequest(BaseModel):
     """API Key 配置请求"""
     deepseek_api_key: str = ""
     aliyun_api_key: str = ""
-    index_tts_port: int = 7860
-    heygem_port: int = 9889
 
 
 class PromptTemplatesRequest(BaseModel):
@@ -130,8 +122,6 @@ class SettingsData(BaseModel):
     """设置数据"""
     deepseek_api_key: str = ""
     aliyun_api_key: str = ""
-    index_tts_port: int = 7860
-    heygem_port: int = 9889
     single_person_prompt_template: str = ""
     dual_person_prompt_template: str = ""
     cover_prompt_template: str = ""
@@ -209,14 +199,19 @@ async def _get_settings_impl():
         prompt_templates = _load_yaml(_get_prompt_templates_path(), {})
         default_params = _load_yaml(_get_default_params_path(), {})
 
+        # 兼容两种字段名格式
+        # api_keys.yaml 可能使用:
+        #   - 新格式: deepseek_api_key, aliyun_api_key
+        #   - 旧格式: deepseek, aliyun
+        deepseek_key = api_keys.get("deepseek_api_key", "") or api_keys.get("deepseek", "")
+        aliyun_key = api_keys.get("aliyun_api_key", "") or api_keys.get("aliyun", "")
+
         return SettingsResponse(
             code=200,
             message="获取成功",
             data=SettingsData(
-                deepseek_api_key=api_keys.get("deepseek_api_key", ""),
-                aliyun_api_key=api_keys.get("aliyun_api_key", ""),
-                index_tts_port=api_keys.get("index_tts_port", 7860),
-                heygem_port=api_keys.get("heygem_port", 9889),
+                deepseek_api_key=deepseek_key,
+                aliyun_api_key=aliyun_key,
                 single_person_prompt_template=prompt_templates.get("single_person_prompt_template", ""),
                 dual_person_prompt_template=prompt_templates.get("dual_person_prompt_template", ""),
                 cover_prompt_template=prompt_templates.get("cover_prompt_template", ""),
@@ -259,9 +254,7 @@ async def update_api_keys(request: ApiKeysRequest):
     try:
         data = {
             "deepseek_api_key": request.deepseek_api_key,
-            "aliyun_api_key": request.aliyun_api_key,
-            "index_tts_port": request.index_tts_port,
-            "heygem_port": request.heygem_port
+            "aliyun_api_key": request.aliyun_api_key
         }
         _save_yaml(_get_api_keys_path(), data)
         logger.info("API Key 配置已保存")
@@ -310,8 +303,6 @@ async def update_default_params(request: DefaultParamsRequest):
 async def _save_all_settings_impl(
     deepseek_api_key: str = "",
     aliyun_api_key: str = "",
-    index_tts_port: int = 7860,
-    heygem_port: int = 9889,
     single_person_prompt_template: str = "",
     dual_person_prompt_template: str = "",
     cover_prompt_template: str = "",
@@ -325,9 +316,7 @@ async def _save_all_settings_impl(
     try:
         _save_yaml(_get_api_keys_path(), {
             "deepseek_api_key": deepseek_api_key,
-            "aliyun_api_key": aliyun_api_key,
-            "index_tts_port": index_tts_port,
-            "heygem_port": heygem_port
+            "aliyun_api_key": aliyun_api_key
         })
         _save_yaml(_get_prompt_templates_path(), {
             "single_person_prompt_template": single_person_prompt_template,
@@ -352,8 +341,6 @@ class SaveAllSettingsRequest(BaseModel):
     """保存所有设置请求"""
     deepseek_api_key: str = ""
     aliyun_api_key: str = ""
-    index_tts_port: int = 7860
-    heygem_port: int = 9889
     single_person_prompt_template: str = ""
     dual_person_prompt_template: str = ""
     cover_prompt_template: str = ""
@@ -369,12 +356,11 @@ async def save_all_settings(request: SaveAllSettingsRequest):
     """保存所有设置 (无斜杠版本 /api/settings)"""
     return await _save_all_settings_impl(
         request.deepseek_api_key, request.aliyun_api_key,
-        request.index_tts_port, request.heygem_port,
         request.single_person_prompt_template,
         request.dual_person_prompt_template,
         request.cover_prompt_template,
         request.heygem_original, request.heygem_inference_steps,
-        request.dual_mode, request.tts_speed, request.tts_emo_weight
+        request.dual_mode, request.tts_speed, request.emo_weight
     )
 
 
@@ -383,7 +369,6 @@ async def save_all_settings_slash(request: SaveAllSettingsRequest):
     """保存所有设置 (有斜杠版本 /api/settings/)"""
     return await _save_all_settings_impl(
         request.deepseek_api_key, request.aliyun_api_key,
-        request.index_tts_port, request.heygem_port,
         request.single_person_prompt_template,
         request.dual_person_prompt_template,
         request.cover_prompt_template,

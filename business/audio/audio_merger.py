@@ -404,7 +404,7 @@ class AudioMerger:
                     file_ext = Path(filename).suffix.lower()
                     
                     if file_ext not in self.SUPPORTED_FORMATS:
-                        logger.warning(f"跳过不支持的文件格式: {filename}")
+                        logger.info(f"跳过不支持的文件格式: {filename}")
                         continue
                     
                     if len(file_content) > self.MAX_FILE_SIZE:

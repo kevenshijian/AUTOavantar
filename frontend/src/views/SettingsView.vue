@@ -25,32 +25,12 @@
             </el-form-item>
 
             <el-form-item label="阿里云 API Key" class="full-width">
-              <el-input 
-                v-model="settingsStore.settings.aliyun_api_key" 
-                type="password" 
+              <el-input
+                v-model="settingsStore.settings.aliyun_api_key"
+                type="password"
                 show-password
                 placeholder="输入阿里云 API Key"
               />
-            </el-form-item>
-
-            <el-form-item label="IndexTTS 端口">
-              <el-input-number 
-                v-model="settingsStore.settings.index_tts_port" 
-                :min="1" 
-                :max="65535" 
-                placeholder="8080"
-              />
-              <span class="form-hint">IndexTTS 服务端口，默认 8080</span>
-            </el-form-item>
-
-            <el-form-item label="HeyGEM 端口">
-              <el-input-number 
-                v-model="settingsStore.settings.heygem_port" 
-                :min="1" 
-                :max="65535" 
-                placeholder="8080"
-              />
-              <span class="form-hint">HeyGEM 服务端口，默认 8080</span>
             </el-form-item>
           </div>
 
@@ -198,122 +178,8 @@
               />
             </div>
             <p class="low-memory-mode-hint">
-              开启后系统启动时不启动 IndexTTS 和 HeyGem，任务执行时按需启动，可降低显存占用
+              开启后系统启动时不加载模型，任务执行时按需加载，任务完成后释放显存
             </p>
-          </div>
-
-          <el-divider />
-
-          <div class="services-status">
-            <!-- IndexTTS 状态 -->
-            <div class="service-item">
-              <div class="service-info">
-                <span class="service-name">IndexTTS</span>
-                <el-tag 
-                  :type="getServiceStatusType(servicesStatus.indextts?.status)"
-                  size="small"
-                >
-                  {{ getServiceStatusLabel(servicesStatus.indextts?.status) }}
-                </el-tag>
-              </div>
-              <div class="service-details" v-if="servicesStatus.indextts?.pid">
-                <span class="detail-item">PID: {{ servicesStatus.indextts.pid }}</span>
-                <span class="detail-item" v-if="servicesStatus.indextts?.uptime_seconds">
-                  运行时长: {{ formatUptime(servicesStatus.indextts.uptime_seconds) }}
-                </span>
-              </div>
-              <div class="service-error" v-if="servicesStatus.indextts?.error_message">
-                <el-alert :title="servicesStatus.indextts.error_message" type="error" :closable="false" />
-              </div>
-              <div class="service-actions">
-                <el-button
-                  v-if="servicesStatus.indextts?.status === 'running'"
-                  type="primary"
-                  size="small"
-                  :loading="serviceLoading.indextts"
-                  @click="handleRestartService('indextts')"
-                >
-                  <el-icon><RefreshRight /></el-icon>
-                  重启
-                </el-button>
-                <el-button
-                  v-else-if="servicesStatus.indextts?.status === 'stopped' || servicesStatus.indextts?.status === 'failed'"
-                  type="success"
-                  size="small"
-                  :loading="serviceLoading.indextts"
-                  @click="handleStartService('indextts')"
-                >
-                  <el-icon><VideoPlay /></el-icon>
-                  启动
-                </el-button>
-                <el-button
-                  v-if="servicesStatus.indextts?.status === 'running'"
-                  type="danger"
-                  size="small"
-                  :loading="serviceLoading.indextts"
-                  @click="handleStopService('indextts')"
-                >
-                  <el-icon><VideoPause /></el-icon>
-                  停止
-                </el-button>
-              </div>
-            </div>
-
-            <el-divider />
-
-            <!-- HeyGem 状态 -->
-            <div class="service-item">
-              <div class="service-info">
-                <span class="service-name">HeyGem</span>
-                <el-tag 
-                  :type="getServiceStatusType(servicesStatus.heygem?.status)"
-                  size="small"
-                >
-                  {{ getServiceStatusLabel(servicesStatus.heygem?.status) }}
-                </el-tag>
-              </div>
-              <div class="service-details" v-if="servicesStatus.heygem?.pid">
-                <span class="detail-item">PID: {{ servicesStatus.heygem.pid }}</span>
-                <span class="detail-item" v-if="servicesStatus.heygem?.uptime_seconds">
-                  运行时长: {{ formatUptime(servicesStatus.heygem.uptime_seconds) }}
-                </span>
-              </div>
-              <div class="service-error" v-if="servicesStatus.heygem?.error_message">
-                <el-alert :title="servicesStatus.heygem.error_message" type="error" :closable="false" />
-              </div>
-              <div class="service-actions">
-                <el-button
-                  v-if="servicesStatus.heygem?.status === 'running'"
-                  type="primary"
-                  size="small"
-                  :loading="serviceLoading.heygem"
-                  @click="handleRestartService('heygem')"
-                >
-                  <el-icon><RefreshRight /></el-icon>
-                  重启
-                </el-button>
-                <el-button
-                  v-else-if="servicesStatus.heygem?.status === 'stopped' || servicesStatus.heygem?.status === 'failed'"
-                  type="success"
-                  size="small"
-                  :loading="serviceLoading.heygem"
-                  @click="handleStartService('heygem')"
-                >
-                  <el-icon><VideoPlay /></el-icon>
-                  启动
-                </el-button>
-                <el-button
-                  v-if="servicesStatus.heygem?.status === 'running'"
-                  type="danger"
-                  size="small"
-                  :loading="serviceLoading.heygem"
-                  @click="handleStopService('heygem')"
-                >
-                  <el-icon><VideoPause /></el-icon>
-                  停止
-                </el-button>
-              </div>
-            </div>
           </div>
         </el-card>
 
@@ -358,13 +224,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, inject, onUnmounted } from 'vue'
+import { ref, computed, onMounted, inject } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { 
-  Key, Document, Setting, Delete, Monitor, 
-  RefreshRight, VideoPlay, VideoPause 
+import {
+  Key, Document, Setting, Delete, Monitor
 } from '@element-plus/icons-vue'
-import { settingsApi, servicesApi, systemApi } from '@/services/api'
+import { settingsApi, systemApi } from '@/services/api'
 import { useSettingsStore } from '@/stores/settingsStore.js'
 import TagGroupManager from '@/components/TagGroupManager.vue'
 import EmotionTagManager from '@/components/EmotionTagManager.vue'
@@ -376,150 +241,9 @@ const settingsStore = useSettingsStore()
 const saving = ref(false)
 const clearingCache = ref(false)
 
-// 服务状态管理
-const servicesStatus = ref({
-  indextts: null,
-  heygem: null
-})
-const serviceLoading = ref({
-  indextts: false,
-  heygem: false
-})
-let statusRefreshTimer = null
-let isPageVisible = true
-let visibilityChangeHandler = null
-
 // 低显存模式
 const lowMemoryMode = ref(false)
 const lowMemoryModeLoading = ref(false)
-
-// 获取服务状态类型
-const getServiceStatusType = (status) => {
-  if (!status) return 'info'
-  switch (status) {
-    case 'running': return 'success'
-    case 'stopped': return 'info'
-    case 'starting': return 'warning'
-    case 'failed': return 'danger'
-    default: return 'info'
-  }
-}
-
-// 获取服务状态标签
-const getServiceStatusLabel = (status) => {
-  if (!status) return '未知'
-  switch (status) {
-    case 'running': return '运行中'
-    case 'stopped': return '已停止'
-    case 'starting': return '启动中'
-    case 'failed': return '启动失败'
-    default: return status
-  }
-}
-
-// 格式化运行时长
-const formatUptime = (seconds) => {
-  if (!seconds) return '-'
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  if (hours > 0) {
-    return `${hours}小时${minutes}分钟`
-  }
-  return `${minutes}分钟`
-}
-
-// 获取服务状态
-const fetchServicesStatus = async () => {
-  try {
-    const response = await servicesApi.getStatus()
-    if (response && response.services) {
-      servicesStatus.value = response.services
-    }
-  } catch (error) {
-    console.error('获取服务状态失败:', error)
-  }
-}
-
-// 重启服务
-const handleRestartService = async (serviceName) => {
-  // 停止定时刷新，防止重启期间重复请求
-  stopStatusRefresh()
-  serviceLoading.value[serviceName] = true
-  try {
-    await servicesApi.restart(serviceName)
-    ElMessage.success(`${serviceName === 'indextts' ? 'IndexTTS' : 'HeyGem'} 服务重启成功`)
-    await fetchServicesStatus()
-  } catch (error) {
-    ElMessage.error(`重启服务失败: ${error.response?.data?.detail || error.message}`)
-  } finally {
-    serviceLoading.value[serviceName] = false
-    // 重启完成后恢复定时刷新
-    startStatusRefresh()
-  }
-}
-
-// 启动服务
-const handleStartService = async (serviceName) => {
-  // 停止定时刷新
-  stopStatusRefresh()
-  serviceLoading.value[serviceName] = true
-  try {
-    await servicesApi.start(serviceName)
-    ElMessage.success(`${serviceName === 'indextts' ? 'IndexTTS' : 'HeyGem'} 服务启动成功`)
-    await fetchServicesStatus()
-  } catch (error) {
-    ElMessage.error(`启动服务失败: ${error.response?.data?.detail || error.message}`)
-  } finally {
-    serviceLoading.value[serviceName] = false
-    // 恢复定时刷新
-    startStatusRefresh()
-  }
-}
-
-// 停止服务
-const handleStopService = async (serviceName) => {
-  // 停止定时刷新
-  stopStatusRefresh()
-  serviceLoading.value[serviceName] = true
-  try {
-    await servicesApi.stop(serviceName)
-    ElMessage.success(`${serviceName === 'indextts' ? 'IndexTTS' : 'HeyGem'} 服务已停止`)
-    await fetchServicesStatus()
-  } catch (error) {
-    ElMessage.error(`停止服务失败: ${error.response?.data?.detail || error.message}`)
-  } finally {
-    serviceLoading.value[serviceName] = false
-    // 恢复定时刷新
-    startStatusRefresh()
-  }
-}
-
-// 启动状态自动刷新
-const startStatusRefresh = () => {
-  fetchServicesStatus() // 立即执行一次
-  statusRefreshTimer = setInterval(fetchServicesStatus, 10000) // 每 10 秒刷新
-}
-
-// 停止状态自动刷新
-const stopStatusRefresh = () => {
-  if (statusRefreshTimer) {
-    clearInterval(statusRefreshTimer)
-    statusRefreshTimer = null
-  }
-}
-
-// 初始化页面可见性监听
-const initVisibilityHandler = () => {
-  visibilityChangeHandler = () => {
-    isPageVisible = !document.hidden
-    if (isPageVisible && !statusRefreshTimer) {
-      startStatusRefresh()
-    } else if (!isPageVisible && statusRefreshTimer) {
-      stopStatusRefresh()
-    }
-  }
-  document.addEventListener('visibilitychange', visibilityChangeHandler)
-}
 
 // 获取系统配置
 const fetchSystemConfig = async () => {
@@ -557,9 +281,7 @@ const saveApiKeys = async () => {
   try {
     await settingsApi.updateApiKeys({
       deepseek_api_key: settingsStore.settings.deepseek_api_key,
-      aliyun_api_key: settingsStore.settings.aliyun_api_key,
-      index_tts_port: settingsStore.settings.index_tts_port,
-      heygem_port: settingsStore.settings.heygem_port
+      aliyun_api_key: settingsStore.settings.aliyun_api_key
     })
     ElMessage.success('API Key 配置已保存')
   } catch (error) {
@@ -640,18 +362,7 @@ const clearCache = async () => {
 
 onMounted(() => {
   settingsStore.fetchSettings()
-  startStatusRefresh() // 启动服务状态自动刷新
-  fetchSystemConfig() // 获取系统配置
-  initVisibilityHandler() // 初始化页面可见性监听
-})
-
-// 组件卸载时停止状态刷新
-onUnmounted(() => {
-  stopStatusRefresh()
-  if (visibilityChangeHandler) {
-    document.removeEventListener('visibilitychange', visibilityChangeHandler)
-    visibilityChangeHandler = null
-  }
+  fetchSystemConfig()
 })
 </script>
 
@@ -921,13 +632,6 @@ onUnmounted(() => {
   margin: 4px 0;
 }
 
-/* 服务状态样式 */
-.services-status {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
 /* 低显存模式开关样式 */
 .low-memory-mode-section {
   margin-bottom: 8px;
@@ -959,73 +663,6 @@ onUnmounted(() => {
 
 .dark-theme .low-memory-mode-hint {
   color: #718096;
-}
-
-.service-item {
-  background: rgba(64, 158, 255, 0.05);
-  border-radius: 8px;
-  padding: 16px;
-  border: 1px solid rgba(64, 158, 255, 0.1);
-}
-
-.dark-theme .service-item {
-  background: rgba(0, 217, 255, 0.05);
-  border-color: rgba(0, 217, 255, 0.1);
-}
-
-.service-info {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 8px;
-}
-
-.service-name {
-  font-weight: 600;
-  font-size: 15px;
-  color: #303133;
-  min-width: 80px;
-}
-
-.dark-theme .service-name {
-  color: #fff;
-}
-
-.service-details {
-  display: flex;
-  gap: 16px;
-  margin-bottom: 12px;
-  font-size: 13px;
-  color: #606266;
-}
-
-.dark-theme .service-details {
-  color: #a0aec0;
-}
-
-.detail-item {
-  background: rgba(0, 0, 0, 0.05);
-  padding: 2px 8px;
-  border-radius: 4px;
-}
-
-.dark-theme .detail-item {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.service-error {
-  margin-bottom: 12px;
-}
-
-.service-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.service-actions .el-button {
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 
 .deerflow-badge {

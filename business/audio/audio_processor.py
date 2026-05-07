@@ -9,17 +9,11 @@ import time
 import uuid
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
+from pathlib import Path
 
-import requests
-
-from core.api_clients import IndexTTSClient
 from core.models.task import ScriptSegment, Task, TaskConfig
 
 logger = logging.getLogger(__name__)
-
-# IndexTTS 超时自动重启配置
-INDEX_TTS_TIMEOUT = 120  # 秒，IndexTTS 处理时间一般不超过 120 秒
-MAX_AUTO_RESTART = 3  # 同一任务内同一服务最多自动重启 3 次
 
 
 def create_audio_speed_processor(output_dir: str = "temp/audio"):
@@ -50,7 +44,7 @@ class AudioProcessor:
 
     def __init__(
         self,
-        tts_host: str = "http://localhost:7860",
+        tts_engine: Any,
         output_dir: str = "temp/audio",
         enable_denoise: bool = True,
         denoise_strength: float = 0.7
@@ -59,23 +53,28 @@ class AudioProcessor:
         初始化音频处理器
 
         Args:
-            tts_host: IndexTTS 服务地址
+            tts_engine: TTSEngine 实例（必需）
             output_dir: 音频输出目录
             enable_denoise: 是否启用 GTCRN 降噪，默认 True
             denoise_strength: 降噪强度 (0.0-1.0)，默认 0.7
         """
-        self.tts_host = tts_host
-        self.output_dir = output_dir
+        if tts_engine is None:
+            raise ValueError("tts_engine 参数是必需的，请提供 TTSEngine 实例")
+
+        self.tts_engine = tts_engine
+        # 确保使用绝对路径
+        self.output_dir = str(Path(output_dir).resolve())
         self.enable_denoise = enable_denoise
         self.denoise_strength = denoise_strength
-        self.tts_client: Optional[IndexTTSClient] = None
+
         self.denoiser = None
         self.speed_processor = None
 
         # 创建输出目录
-        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(self.output_dir, exist_ok=True)
 
-        self._init_tts_client()
+        logger.info(f"AudioProcessor 初始化成功，输出目录: {self.output_dir}")
+
         self._init_denoiser()
         self._init_speed_processor()
 
@@ -88,21 +87,6 @@ class AudioProcessor:
         except Exception as e:
             logger.warning(f"音频语速处理器初始化失败：{e}")
             self.speed_processor = None
-
-    def _init_tts_client(self):
-        """初始化 TTS 客户端"""
-        try:
-            # 获取项目根目录
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            # IndexTTS 输出目录（使用相对路径）
-            indextts_output_dir = os.path.join(project_root, "index-tts-2", "outputs")
-            self.tts_client = IndexTTSClient(
-                host=self.tts_host,
-                output_dir=indextts_output_dir
-            )
-            logger.info(f"IndexTTS 客户端初始化成功：{self.tts_host}, 输出目录: {indextts_output_dir}")
-        except Exception as e:
-            logger.error(f"IndexTTS 客户端初始化失败：{e}")
 
     def _init_denoiser(self):
         """初始化 GTCRN 降噪器"""
@@ -133,7 +117,7 @@ class AudioProcessor:
             logger.info(f"开始音频降噪: {audio_path}")
             
             if not self.denoiser:
-                logger.warning("降噪器未初始化，跳过降噪处理")
+                logger.info("降噪器未初始化，跳过降噪处理")
                 return {"output_path": audio_path}
 
             # 构建完整的音频文件路径
@@ -243,90 +227,53 @@ class AudioProcessor:
             logger.error(f"生成字幕时发生异常：{e}")
             return None
 
-    def _synthesize_with_auto_restart(
+    def _synthesize_with_engine(
         self,
         segment: ScriptSegment,
         prompt_audio: str,
-        speed: float = 1.0,
+        output_path: str,
         emotion_label: Optional[str] = None,
-        emotion_weight: float = 0.4,
-        task_id: Optional[str] = None,
-        cancel_callback: Optional[callable] = None
-    ) -> Dict[str, Any]:
+        emotion_weight: float = 0.4
+    ) -> Optional[str]:
         """
-        带自动重启的 TTS 合成
-        
-        捕获 requests.Timeout 后自动重启 IndexTTS 服务并重试，
-        超过 MAX_AUTO_RESTART 次后抛出异常。
-        
+        使用 TTSEngine 进行语音合成
+
         Args:
             segment: 文案段落
             prompt_audio: 音色参考音频路径
-            speed: 语速
+            output_path: 输出音频路径
             emotion_label: 情绪标签
             emotion_weight: 情感强度
-            task_id: 任务ID
-            cancel_callback: 取消回调函数
-            
+
         Returns:
-            TTS 合成结果字典
-            
-        Raises:
-            Exception: 超过最大重启次数仍失败
+            生成的音频路径，失败返回 None
         """
-        restart_count = 0
-        
-        while True:
-            # 检查是否取消
-            if cancel_callback and cancel_callback():
-                raise Exception("任务被取消")
-            
-            try:
-                # 准备调用 TTS 的参数
-                tts_kwargs = {
-                    "prompt": prompt_audio,
-                    "text": segment.text,
-                    "speed": speed,
-                    "timeout": INDEX_TTS_TIMEOUT,  # 使用 60 秒超时
-                }
-                
-                # 传递情绪参数
-                if emotion_label:
-                    tts_kwargs["emotion"] = emotion_label
-                    tts_kwargs["intensity"] = emotion_weight
-                
-                # 调用 TTS
-                tts_task_id, output = self.tts_client.synthesize(**tts_kwargs)
-                
-                # 成功，返回结果
-                return {"task_id": tts_task_id, "output": output}
-                
-            except requests.Timeout:
-                restart_count += 1
-                if restart_count > MAX_AUTO_RESTART:
-                    raise Exception(f"IndexTTS 多次重启仍无响应 (已重启 {restart_count - 1} 次)")
-                
-                logger.warning(
-                    f"IndexTTS 请求超时 ({INDEX_TTS_TIMEOUT}s)，自动重启 "
-                    f"({restart_count}/{MAX_AUTO_RESTART})"
-                )
-                
-                # 获取 ServiceManager 并重启 IndexTTS
-                from core.service_manager import get_service_manager
-                sm = get_service_manager()
-                if sm:
-                    try:
-                        sm.restart_service("indextts")
-                        logger.info("IndexTTS 服务重启完成，继续任务")
-                    except Exception as e:
-                        logger.error(f"IndexTTS 服务重启失败: {e}")
-                        raise
-                else:
-                    raise Exception("ServiceManager 未初始化，无法自动重启")
-                    
-            except Exception as e:
-                # 其他异常，直接抛出
-                raise
+        if not self.tts_engine:
+            logger.error("TTSEngine 未初始化")
+            return None
+
+        try:
+            # 确保引擎已加载
+            if not self.tts_engine.is_loaded:
+                logger.info("TTSEngine 未加载，正在加载...")
+                if not self.tts_engine.load():
+                    logger.error("TTSEngine 加载失败")
+                    return None
+
+            # 调用引擎合成
+            result = self.tts_engine.synthesize(
+                text=segment.text,
+                voice_path=prompt_audio,
+                output_path=output_path,
+                emotion=emotion_label,
+                intensity=emotion_weight
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"TTSEngine 合成失败: {e}")
+            return None
 
     def synthesize_segment(
         self,
@@ -355,56 +302,43 @@ class AudioProcessor:
         emotion_weight = emo_weight or getattr(segment, 'emotion_weight', 0.4)
         # API 支持 0.0~1.6 的强度范围
         emotion_weight = min(max(emotion_weight, 0.0), 1.6)
-        
+
         # 获取情绪标签（tone 字段），直接传递给 index-tts 处理
         emotion_label = getattr(segment, 'tone', None)
-        
+
+        # 生成文件名：使用 task_id 前缀，格式为 {task_id}_audio_{segment_id}.wav
+        if task_id:
+            audio_filename = f"{task_id}_audio_{segment.segment_id}.wav"
+        else:
+            audio_filename = f"{segment.segment_id}.wav"
+        output_path = os.path.join(self.output_dir, audio_filename)
+
         try:
             # 记录情绪信息
             if emotion_label:
                 logger.info(f"段落 {segment.segment_id} 标签: {emotion_label}, 强度: {emotion_weight}")
             else:
                 logger.info(f"段落 {segment.segment_id} 无标签，使用默认情绪")
-            
-            # 使用带自动重启的 TTS 合成
-            result = self._synthesize_with_auto_restart(
+
+            # 使用 TTSEngine 引擎模式合成
+            logger.info(f"使用 TTSEngine 引擎模式合成段落 {segment.segment_id}")
+            audio_path = self._synthesize_with_engine(
                 segment=segment,
                 prompt_audio=prompt_audio,
-                speed=speed,
+                output_path=output_path,
                 emotion_label=emotion_label,
-                emotion_weight=emotion_weight,
-                task_id=task_id
+                emotion_weight=emotion_weight
             )
 
-            # 合成成功，获取生成的音频
-            audio_path = None
-            if isinstance(result, dict):
-                output = result.get("output")
-                if isinstance(output, dict) and output.get("status") == "success":
-                    audio_path = output.get("audio_path")
-            
-            if audio_path:
-                # 生成文件名：使用 task_id 前缀，格式为 {task_id}_audio_{segment_id}.wav
-                if task_id:
-                    audio_filename = f"{task_id}_audio_{segment.segment_id}.wav"
-                else:
-                    audio_filename = f"{segment.segment_id}.wav"
-                
-                output_path = self._save_audio(
-                    audio_path,
-                    audio_filename
-                )
-
-                # 获取音频时长
-                duration = self._get_audio_duration(output_path)
-
-                segment.audio_path = output_path
+            if audio_path and os.path.exists(audio_path):
+                duration = self._get_audio_duration(audio_path)
+                segment.audio_path = audio_path
                 segment.duration = duration
 
                 return AudioSegmentResult(
                     segment_id=segment.segment_id,
                     text=segment.text,
-                    audio_path=output_path,
+                    audio_path=audio_path,
                     duration=duration,
                     status="success",
                     speaker=speaker,
@@ -417,7 +351,7 @@ class AudioProcessor:
                 audio_path=None,
                 duration=0.0,
                 status="failed",
-                error_message="未获取到生成的音频文件",
+                error_message="TTSEngine 合成失败，未生成音频文件",
                 speaker=speaker,
                 tone=getattr(segment, 'tone', None)
             )
@@ -439,7 +373,8 @@ class AudioProcessor:
         self,
         task: Task,
         config: TaskConfig,
-        cancel_callback: Optional[callable] = None
+        cancel_callback: Optional[callable] = None,
+        progress_callback: Optional[callable] = None
     ) -> List[AudioSegmentResult]:
         """
         合成任务所有段落
@@ -447,6 +382,8 @@ class AudioProcessor:
         Args:
             task: 任务
             config: 配置
+            cancel_callback: 取消回调
+            progress_callback: 进度回调函数，参数为 (progress, description)
 
         Returns:
             音频结果列表
@@ -471,14 +408,14 @@ class AudioProcessor:
         if not task:
             logger.error("任务对象为空")
             return results
-        
+
         if not task.segments:
             logger.warning("任务没有段落")
             return results
 
-        # 检查 TTS 客户端是否初始化
-        if not self.tts_client:
-            logger.error("TTS 客户端未初始化")
+        # 检查 TTSEngine 是否已加载
+        if not self.tts_engine or not self.tts_engine.is_loaded:
+            logger.error("TTSEngine 未加载")
             for segment in task.segments:
                 results.append(AudioSegmentResult(
                     segment_id=segment.segment_id,
@@ -486,7 +423,7 @@ class AudioProcessor:
                     audio_path=None,
                     duration=0.0,
                     status="failed",
-                    error_message="TTS 客户端未初始化"
+                    error_message="TTSEngine 未加载"
                 ))
             return results
 
@@ -582,21 +519,28 @@ class AudioProcessor:
                     try:
                         # 根据说话人选择对应的参考音频
                         prompt_audio = left_prompt_audio if segment.speaker == "left" else right_prompt_audio
-                        
+
                         logger.info(f"合成段落 {segment.segment_id} (说话人: {segment.speaker}, 尝试 {attempt + 1}/{max_retries})")
-                        # 根据说话人选择对应的语速
+                        # 根据说话人选择对应的语速和情感权重
                         segment_speed = config.tts_speed
+                        segment_emo_weight = config.tts_emo_weight
                         if config.enable_double_mode:
-                            if segment.speaker == "left" and config.left_tts_speed:
-                                segment_speed = config.left_tts_speed
-                            elif segment.speaker == "right" and config.right_tts_speed:
-                                segment_speed = config.right_tts_speed
-                        
+                            if segment.speaker == "left":
+                                if config.left_tts_speed:
+                                    segment_speed = config.left_tts_speed
+                                if config.left_tts_emo_weight:
+                                    segment_emo_weight = config.left_tts_emo_weight
+                            elif segment.speaker == "right":
+                                if config.right_tts_speed:
+                                    segment_speed = config.right_tts_speed
+                                if config.right_tts_emo_weight:
+                                    segment_emo_weight = config.right_tts_emo_weight
+
                         result = self.synthesize_segment(
                             segment=segment,
                             prompt_audio=prompt_audio,
                             speed=segment_speed,
-                            emo_weight=config.tts_emo_weight,
+                            emo_weight=segment_emo_weight,
                             speaker=segment.speaker,
                             task_id=task.task_id
                         )
@@ -630,11 +574,15 @@ class AudioProcessor:
 
                 # 保存中间产物
                 if len(results) > 0 and results[-1].status == "success":
-                    task.progress = (i + 1) / len(task.segments) * 50
                     # 触发进度回调
+                    if progress_callback:
+                        total_segments = len(task.segments)
+                        completed = i + 1
+                        tag = getattr(segment, 'tone', None) or getattr(segment, 'emotion', None) or getattr(segment, 'tag', None)
+                        progress_callback(completed, total_segments, tag)
 
                 time.sleep(0.5)  # 避免并发过高
-            
+
             # 合并同一说话人的音频并添加静音
             if results:
                 try:
@@ -751,8 +699,12 @@ class AudioProcessor:
 
                 # 保存中间产物
                 if len(results) > 0 and results[-1].status == "success":
-                    task.progress = (i + 1) / len(task.segments) * 50
                     # 触发进度回调
+                    if progress_callback:
+                        total_segments = len(task.segments)
+                        completed = i + 1
+                        tag = getattr(segment, 'tone', None) or getattr(segment, 'emotion', None) or getattr(segment, 'tag', None)
+                        progress_callback(completed, total_segments, tag)
 
                 time.sleep(0.5)  # 避免并发过高
 
@@ -979,7 +931,15 @@ class AudioProcessor:
                     if not os.path.isabs(audio_path):
                         audio_path = os.path.abspath(audio_path)
                     if os.path.exists(audio_path):
-                        escaped_path = audio_path.replace("'", "'\\''")
+                        # 安全检查：验证路径不包含危险字符
+                        # ffmpeg concat 格式要求路径用单引号包裹，内部单引号需要转义
+                        # 但更安全的方式是检查路径是否包含可能导致问题的字符
+                        if "'" in audio_path:
+                            # 使用 ffmpeg 的 -safe 0 选项配合正确的转义
+                            # 单引号转义：' 替换为 '\''
+                            escaped_path = audio_path.replace("'", "'\\''")
+                        else:
+                            escaped_path = audio_path
                         f.write(f"file '{escaped_path}'\n")
             
             temp_merged_path = os.path.join(self.output_dir, f"temp_merged_{speaker}_{safe_tone}_{task_id}.wav")
@@ -1064,23 +1024,23 @@ class AudioProcessor:
     def _generate_silence_file(self, duration: float) -> Optional[str]:
         """
         生成静音音频文件
-        
+
         Args:
             duration: 静音时长（秒）
-            
+
         Returns:
             静音文件路径，失败返回 None
         """
         if duration <= 0:
             return None
-            
+
         try:
             import tempfile
             import subprocess
-            
+
             # 创建临时静音文件
             silence_path = os.path.join(self.output_dir, f"silence_{uuid.uuid4().hex[:8]}.wav")
-            
+
             cmd = [
                 "ffmpeg",
                 "-f", "lavfi",
@@ -1090,14 +1050,18 @@ class AudioProcessor:
                 "-y",
                 silence_path
             ]
-            
+
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0 and os.path.exists(silence_path):
+                # 追踪生成的静音文件，供后续清理
+                if not hasattr(self, '_silence_files'):
+                    self._silence_files = []
+                self._silence_files.append(silence_path)
                 return silence_path
             else:
                 logger.error(f"生成静音文件失败: {result.stderr}")
                 return None
-                
+
         except Exception as e:
             logger.error(f"生成静音文件时发生异常: {e}")
             return None
@@ -1129,8 +1093,11 @@ class AudioProcessor:
                     if not os.path.isabs(audio_path):
                         audio_path = os.path.abspath(audio_path)
                     if os.path.exists(audio_path):
-                        # 路径中可能包含特殊字符，需要转义
-                        escaped_path = audio_path.replace("'", "'\\''")
+                        # 安全处理路径中的单引号
+                        if "'" in audio_path:
+                            escaped_path = audio_path.replace("'", "'\\''")
+                        else:
+                            escaped_path = audio_path
                         f.write(f"file '{escaped_path}'\n")
             
             cmd = [
@@ -1208,8 +1175,13 @@ class AudioProcessor:
             
             with open(temp_concat_file, 'w', encoding='utf-8') as f:
                 for seg in segments:
-                    if os.path.exists(seg.audio_path):
-                        escaped_path = seg.audio_path.replace("'", "'\\''")
+                    if seg.audio_path and os.path.exists(seg.audio_path):
+                        audio_path = seg.audio_path
+                        # 安全处理路径中的单引号
+                        if "'" in audio_path:
+                            escaped_path = audio_path.replace("'", "'\\''")
+                        else:
+                            escaped_path = audio_path
                         f.write(f"file '{escaped_path}'\n")
             
             # 临时合并文件
@@ -1541,27 +1513,39 @@ class AudioProcessor:
             return audio_path
 
     def close(self):
-        """关闭客户端"""
-        if self.tts_client:
-            self.tts_client.close()
+        """关闭处理器，清理临时文件"""
+        # 清理静音文件
+        if hasattr(self, '_silence_files') and self._silence_files:
+            for file_path in self._silence_files:
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        logger.debug(f"已清理静音文件: {file_path}")
+                except Exception as e:
+                    logger.warning(f"清理静音文件失败: {e}")
+            self._silence_files = []
+            logger.info(f"AudioProcessor 已清理 {len(self._silence_files)} 个静音文件")
+
+        # 引擎模式下无需关闭客户端
+        logger.info("AudioProcessor 已关闭")
 
 
 def create_audio_processor(
-    tts_host: str = "http://localhost:7860",
+    tts_engine: Any,
     output_dir: str = "temp/audio",
     enable_denoise: bool = True,
     denoise_strength: float = 0.7
 ) -> AudioProcessor:
     """创建音频处理器的便捷函数
-    
+
     Args:
-        tts_host: IndexTTS 服务地址
+        tts_engine: TTSEngine 实例（必需）
         output_dir: 音频输出目录
         enable_denoise: 是否启用降噪
         denoise_strength: 降噪强度
     """
     return AudioProcessor(
-        tts_host=tts_host,
+        tts_engine=tts_engine,
         output_dir=output_dir,
         enable_denoise=enable_denoise,
         denoise_strength=denoise_strength

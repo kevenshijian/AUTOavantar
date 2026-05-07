@@ -38,6 +38,21 @@ logger = logging.getLogger("autoavantar-api.tasks")
 router = APIRouter()
 
 
+def get_workflow_service_or_raise() -> WorkflowService:
+    """
+    获取工作流服务，如果未初始化则抛出异常
+
+    用于 FastAPI Depends，确保服务已初始化
+    """
+    service = get_workflow_service()
+    if service is None:
+        raise HTTPException(
+            status_code=503,
+            detail="服务正在初始化中，请稍后再试。引擎正在后台加载..."
+        )
+    return service
+
+
 def _get_role_double_mode_info(role_id: str) -> Optional[Dict[str, Any]]:
     """
     获取角色的双人模式信息
@@ -94,7 +109,7 @@ def _get_role_double_mode_info(role_id: str) -> Optional[Dict[str, Any]]:
 @router.post("", response_model=ApiResponse)
 async def create_task(
     request: TaskCreateRequest,
-    workflow_service: WorkflowService = Depends(get_workflow_service)
+    workflow_service: WorkflowService = Depends(get_workflow_service_or_raise)
 ):
     """
     创建新任务（使用工作流服务异步执行）
@@ -128,10 +143,11 @@ async def create_task(
         logger.info(f"API create_task 请求参数: left_prompt_audio_path={left_prompt_audio_path}")
         logger.info(f"API create_task 请求参数: right_prompt_audio_path={right_prompt_audio_path}")
         logger.info(f"API create_task 请求参数: prompt_audio_path={prompt_audio_path}")
-        
+        logger.info(f"API create_task 请求参数: heygem_batch_size={request.heygem_batch_size}")
+
         task = await workflow_service.create_task(
             name=request.name,
-            source_video_path=request.source_video_path,
+            source_video_path=request.source_video_path or "",
             script_text=request.script_text or "",
             topic=request.topic or "",
             prompt_audio_path=prompt_audio_path,
@@ -147,6 +163,8 @@ async def create_task(
             tts_emo_weight=request.tts_emo_weight,
             left_tts_speed=request.left_tts_speed,
             right_tts_speed=request.right_tts_speed,
+            left_tts_emo_weight=request.left_tts_emo_weight,
+            right_tts_emo_weight=request.right_tts_emo_weight,
             enable_subtitle=request.enable_subtitle,
             subtitle_font=request.subtitle_font,
             subtitle_size=request.subtitle_size,
@@ -160,6 +178,7 @@ async def create_task(
             bgm_volume=request.bgm_volume,
             enable_cover=request.enable_cover,
             heygem_steps=request.heygem_steps,
+            heygem_batch_size=request.heygem_batch_size,
             opening_video=request.opening_video,
             loop_videos=request.loop_videos,
             scene_videos=request.scene_videos,
@@ -204,7 +223,7 @@ async def get_tasks(
     status: Optional[str] = Query(None, description="任务状态过滤"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-    workflow_service: WorkflowService = Depends(get_workflow_service)
+    workflow_service: WorkflowService = Depends(get_workflow_service_or_raise)
 ):
     """
     获取任务列表
@@ -243,8 +262,8 @@ async def get_tasks(
                         name=task.name,
                         status=TaskStatus(task.status.value),
                         current_stage=(
-                            TaskStage(task.current_stage) 
-                            if task.current_stage and task.current_stage in [s.value for s in TaskStage] 
+                            TaskStage(task.current_stage)
+                            if task.current_stage and task.current_stage in [s.value for s in TaskStage]
                             else TaskStage.INITIALIZING
                         ),
                         progress=task.progress,
@@ -256,6 +275,7 @@ async def get_tasks(
                         error_message=task.error_message,
                         created_at=task.created_at,
                         updated_at=task.updated_at,
+                        is_priority=task.is_priority,
                     )
                     for task in paginated_tasks
                 ],
@@ -272,7 +292,7 @@ async def get_tasks(
 @router.get("/{task_id}", response_model=ApiResponse)
 async def get_task(
     task_id: str,
-    workflow_service: WorkflowService = Depends(get_workflow_service)
+    workflow_service: WorkflowService = Depends(get_workflow_service_or_raise)
 ):
     """
     获取任务详情
@@ -323,7 +343,7 @@ async def get_task(
 async def update_task(
     task_id: str,
     request: TaskUpdateRequest,
-    workflow_service: WorkflowService = Depends(get_workflow_service)
+    workflow_service: WorkflowService = Depends(get_workflow_service_or_raise)
 ):
     """
     更新任务信息
@@ -379,7 +399,7 @@ async def update_task(
 @router.delete("/{task_id}", response_model=ApiResponse)
 async def delete_task(
     task_id: str,
-    workflow_service: WorkflowService = Depends(get_workflow_service)
+    workflow_service: WorkflowService = Depends(get_workflow_service_or_raise)
 ):
     """
     删除任务
@@ -413,7 +433,7 @@ async def delete_task(
 @router.post("/{task_id}/cancel", response_model=ApiResponse)
 async def cancel_task(
     task_id: str,
-    workflow_service: WorkflowService = Depends(get_workflow_service)
+    workflow_service: WorkflowService = Depends(get_workflow_service_or_raise)
 ):
     """
     取消任务（独立接口，兼容前端调用）
@@ -448,7 +468,7 @@ async def cancel_task(
 async def control_task(
     task_id: str,
     request: TaskControlRequest,
-    workflow_service: WorkflowService = Depends(get_workflow_service)
+    workflow_service: WorkflowService = Depends(get_workflow_service_or_raise)
 ):
     """
     控制任务（暂停、恢复、取消、重试、从检查点重启）
@@ -504,7 +524,7 @@ async def control_task(
 @router.post("/{task_id}/start", response_model=ApiResponse)
 async def start_task(
     task_id: str,
-    workflow_service: WorkflowService = Depends(get_workflow_service)
+    workflow_service: WorkflowService = Depends(get_workflow_service_or_raise)
 ):
     """
     启动任务
@@ -517,7 +537,13 @@ async def start_task(
     """
     try:
         await register_task_websocket(task_id, workflow_service)
-        
+
+        # 等待 WebSocket 连接建立（最多 2 秒）
+        from api.routers.websocket import manager
+        connection_ready = await manager.wait_for_connection(task_id, timeout=2.0)
+        if not connection_ready:
+            logger.warning(f"WebSocket 连接未建立，任务 {task_id} 将继续执行但可能丢失初始状态更新")
+
         success = await workflow_service.start_task(task_id)
 
         if not success:
@@ -540,7 +566,7 @@ async def start_task(
 @router.post("/{task_id}/priority", response_model=ApiResponse)
 async def priority_task(
     task_id: str,
-    workflow_service: WorkflowService = Depends(get_workflow_service)
+    workflow_service: WorkflowService = Depends(get_workflow_service_or_raise)
 ):
     """
     将任务优先级提升到最前
@@ -575,7 +601,7 @@ async def priority_task(
 async def get_task_logs(
     task_id: str,
     lines: int = Query(100, ge=1, le=1000, description="日志行数"),
-    workflow_service: WorkflowService = Depends(get_workflow_service)
+    workflow_service: WorkflowService = Depends(get_workflow_service_or_raise)
 ):
     """
     获取任务日志
@@ -645,7 +671,7 @@ async def extract_audio(
 @router.post("/denoise-audio", response_model=ApiResponse)
 async def denoise_audio(
     audio_id: str,
-    workflow_service: WorkflowService = Depends(get_workflow_service)
+    workflow_service: WorkflowService = Depends(get_workflow_service_or_raise)
 ):
     """
     音频降噪

@@ -34,7 +34,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 # heygem 根目录
-HEYGEM_ROOT = os.path.join(PROJECT_ROOT, "heygem-win-50-onnx")
+HEYGEM_ROOT = os.path.join(PROJECT_ROOT, "engines", "heygem")
 if HEYGEM_ROOT not in sys.path:
     sys.path.insert(0, HEYGEM_ROOT)
 
@@ -72,7 +72,7 @@ def test_api(server: str, video: str, audio: str, face_id: int, steps: int, time
         status_code = e.code
     except urllib.error.URLError as e:
         print(f"\n[错误] 无法连接服务器: {e.reason}")
-        print(f"  请确认服务器已启动: python heygem-win-50-onnx/app.py")
+        print(f"  请确认服务器已启动: python engines/heygem/app.py")
         return None
     except Exception as e:
         print(f"\n[错误] 请求异常: {e}")

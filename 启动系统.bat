@@ -1,27 +1,32 @@
 @echo off
 chcp 65001 >nul
-title AUTOavantar 数字人视频生成系统
+title AUTOavantar
 
-echo ========================================
-echo   AUTOavantar 数字人视频生成系统
-echo   版本: 1.1.0
-echo ========================================
+echo ============================================================
+echo   AUTOavantar Digital Human Video Generation System
+echo   Version: 1.2.0
+echo   Mode: Engine Mode
+echo ============================================================
+echo.
+echo Starting service, please wait...
+echo.
+echo Service URL: http://localhost:9010
+echo API Docs: http://localhost:9010/docs
+echo.
+echo Note: TTS and HeyGem engines will be loaded automatically
+echo       First startup may take longer, please wait...
 echo.
 
-REM 检查 Python 环境
-if not exist "py310\python.exe" (
-    echo [错误] 未找到 Python 环境: py310\python.exe
-    echo 请确保 py310 目录存在
-    pause
-    exit /b 1
+cd /d "%~dp0"
+
+if exist "py310\python.exe" (
+    set PYTHON_EXE=py310\python.exe
+) else (
+    set PYTHON_EXE=python
 )
 
-REM 切换到 backend 目录
-cd backend
+set PYTHONPATH=%~dp0
 
-REM 启动后端服务
-echo [启动] 正在启动后端服务...
-echo.
-..\py310\python.exe -m uvicorn api.main:app --host 0.0.0.0 --port 9010
+%PYTHON_EXE% desktop_launcher.py
 
 pause

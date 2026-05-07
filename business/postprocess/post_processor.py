@@ -508,7 +508,10 @@ class PostProcessor:
             SRT 文件路径，如果失败返回 None
         """
         try:
-            srt_path = video_path.replace(".mp4", ".srt")
+            # 字幕文件保存到临时目录，而不是跟随视频路径
+            from core.paths import get_path_manager
+            path_manager = get_path_manager()
+            srt_path = os.path.join(path_manager.temp_dir, f"{task.task_id}.srt")
 
             # 准备段落文本和时长信息
             segments_text = []
@@ -525,7 +528,7 @@ class PostProcessor:
                     current_offset += duration
 
             if not segments_text:
-                logger.warning("没有文本内容，跳过字幕生成")
+                logger.info("没有文本内容，跳过字幕生成")
                 return None
 
             # 使用统一精确字幕同步器
@@ -603,74 +606,91 @@ class PostProcessor:
 
             srt_path_abs = current_srt_path.replace("\\", "/")
 
-            # 构建字幕样式参数
-            font = getattr(config, 'subtitle_font', "SimHei")
-            font_size = getattr(config, 'subtitle_size', 24)
-            color_str = getattr(config, 'subtitle_color', "white")
-            stroke_color = getattr(config, 'subtitle_stroke_color', "#000000")
-            stroke_width = getattr(config, 'subtitle_stroke_width', 1.0)
-            position = getattr(config, 'subtitle_position', SubtitlePosition.BOTTOM)
-            background_alpha = getattr(config, 'subtitle_background_alpha', 0.0)
-            
-            logger.info(f"字幕样式参数 - 字体: {font}, 字号: {font_size}, 颜色: {color_str}")
-            logger.info(f"字幕样式参数 - 描边颜色: {stroke_color}, 描边宽度: {stroke_width}")
-            logger.info(f"字幕样式参数 - 位置: {position}, 背景透明: {background_alpha}")
+            # 检查 SRT 文件是否存在
+            if not os.path.exists(current_srt_path):
+                logger.error(f"SRT 文件不存在: {current_srt_path}")
+                return None
 
-            def hex_to_bgr(hex_color: str) -> str:
-                hex_color = hex_color.lstrip('#')
-                if len(hex_color) == 6:
-                    r, g, b = hex_color[0:2], hex_color[2:4], hex_color[4:6]
-                    return f"&H{b}{g}{r}"
-                return "&HFFFFFF"
+            logger.info(f"SRT 文件存在，大小: {os.path.getsize(current_srt_path)} bytes")
 
-            if color_str.lower() == "white":
-                primary_color = "&HFFFFFF"
-            elif color_str.lower() == "black":
-                primary_color = "&H000000"
+            # 构建字幕滤镜，需要正确处理 Windows 路径中的冒号
+            # ffmpeg 的 subtitles 滤镜中，冒号是选项分隔符，需要转义为 \\:
+            srt_path_escaped = srt_path_abs.replace(":", "\\:")
+
+            # 构建字幕样式参数 (force_style)
+            # 从 config 中获取字幕样式配置
+            style_params = []
+
+            # 字体
+            if hasattr(config, 'subtitle_font') and config.subtitle_font:
+                style_params.append(f"FontName={config.subtitle_font}")
+
+            # 字号
+            if hasattr(config, 'subtitle_size'):
+                style_params.append(f"FontSize={config.subtitle_size}")
+
+            # 颜色 (需要转换为 ASS 格式，BGR 顺序)
+            if hasattr(config, 'subtitle_color') and config.subtitle_color:
+                ass_color = self._hex_to_ass_color(config.subtitle_color)
+                style_params.append(f"PrimaryColour={ass_color}")
+
+            # 描边颜色
+            if hasattr(config, 'subtitle_stroke_color') and config.subtitle_stroke_color:
+                ass_stroke_color = self._hex_to_ass_color(config.subtitle_stroke_color)
+                style_params.append(f"OutlineColour={ass_stroke_color}")
+
+            # 描边宽度
+            if hasattr(config, 'subtitle_stroke_width'):
+                style_params.append(f"Outline={config.subtitle_stroke_width}")
+
+            # 背景透明度 (使用 BackColour 和 Alpha)
+            if hasattr(config, 'subtitle_background_alpha') and config.subtitle_background_alpha > 0:
+                # 有背景时设置黑色半透明背景
+                alpha = int((1 - config.subtitle_background_alpha) * 255)
+                style_params.append(f"BackColour=&H{alpha:02X}000000")
+                style_params.append("BorderStyle=3")
+
+            # 字幕位置 (通过 MarginV 控制垂直距离)
+            if hasattr(config, 'subtitle_position'):
+                position = config.subtitle_position
+                if hasattr(position, 'value'):
+                    position_value = position.value
+                else:
+                    position_value = str(position)
+
+                # 根据位置设置垂直边距
+                if position_value == "top":
+                    # 顶部：设置较大的 MarginV 使字幕靠近顶部
+                    style_params.append("MarginV=50")
+                    style_params.append("Alignment=6")  # 顶部居中
+                elif position_value == "center":
+                    # 居中：使用默认对齐
+                    style_params.append("MarginV=0")
+                    style_params.append("Alignment=10")  # 垂直居中
+                else:  # bottom
+                    # 底部：默认位置
+                    style_params.append("MarginV=30")
+                    style_params.append("Alignment=2")  # 底部居中
+
+            # 构建 force_style 参数
+            if style_params:
+                force_style = ",".join(style_params)
+                subtitle_filter = f"subtitles='{srt_path_escaped}':force_style='{force_style}'"
             else:
-                primary_color = hex_to_bgr(color_str)
+                subtitle_filter = f"subtitles='{srt_path_escaped}'"
 
-            secondary_color = hex_to_bgr(stroke_color)
+            logger.info(f"字幕滤镜: {subtitle_filter}")
 
-            if position == SubtitlePosition.TOP:
-                alignment = 6
-            elif position == SubtitlePosition.CENTER:
-                alignment = 10
-            else:
-                alignment = 2
+            # 使用 shell=True 方式执行，更好处理 Windows 路径
+            cmd_str = f'ffmpeg -y -i "{video_path}" -vf "{subtitle_filter}" -c:v libx264 -crf 18 -c:a aac -b:a 192k "{output_path}"'
 
-            force_style_parts = [
-                f"FontName={font}",
-                f"FontSize={font_size}",
-                f"PrimaryColour={primary_color}",
-                f"SecondaryColour={secondary_color}",
-                f"Outline={stroke_width}",
-                f"Alignment={alignment}",
-                f"Shadow=0",
-                f"MarginV=30",
-                f"MarginL=10",
-                f"MarginR=10",
-                f"BorderStyle={1 if background_alpha > 0 else 1}",
-            ]
-
-            alpha_value = int(255 * (1 - background_alpha))
-            back_colour = f"&H{alpha_value:02X}000000"
-            force_style_parts.append(f"BackColour={back_colour}")
-
-            force_style = ",".join(force_style_parts)
-
-            subtitle_filter = f"subtitles={srt_path_abs}:force_style='{force_style}'"
-
-            cmd = [
-                "ffmpeg", "-y", "-i", video_path,
-                "-vf", subtitle_filter,
-                "-c:v", "libx264", "-crf", "18",
-                "-c:a", "aac", "-b:a", "192k",
-                output_path
-            ]
-
-            logger.info(f"添加字幕命令: {' '.join(cmd)}")
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            logger.info(f"添加字幕命令: {cmd_str}")
+            try:
+                result = subprocess.run(cmd_str, check=True, capture_output=True, text=True, shell=True)
+            except subprocess.CalledProcessError as e:
+                logger.error(f"ffmpeg 错误输出: {e.stderr}")
+                logger.error(f"ffmpeg 标准输出: {e.stdout}")
+                raise
 
             os.replace(output_path, video_path)
 
@@ -683,7 +703,63 @@ class PostProcessor:
             logger.error(f"字幕添加失败详情: {traceback.format_exc()}")
             return None
 
-    
+    def _hex_to_ass_color(self, hex_color: str) -> str:
+        """
+        将十六进制颜色转换为 ASS 格式颜色
+
+        ASS 格式使用 BGR 顺序，格式为 &HAABBGGRR
+        其中 AA 是透明度 (00=不透明, FF=完全透明)
+
+        Args:
+            hex_color: 十六进制颜色，如 "#FFFFFF" 或 "white" 或 "rgb(255,255,255)"
+
+        Returns:
+            ASS 格式颜色字符串，如 "&H00FFFFFF"
+        """
+        # 处理颜色名称
+        color_names = {
+            "white": "#FFFFFF",
+            "black": "#000000",
+            "red": "#FF0000",
+            "green": "#00FF00",
+            "blue": "#0000FF",
+            "yellow": "#FFFF00",
+            "cyan": "#00FFFF",
+            "magenta": "#FF00FF",
+        }
+
+        hex_color = hex_color.strip()
+
+        # 如果是颜色名称，转换为十六进制
+        if hex_color.lower() in color_names:
+            hex_color = color_names[hex_color.lower()]
+
+        # 处理 rgb() 格式
+        if hex_color.startswith("rgb("):
+            import re
+            match = re.match(r"rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", hex_color)
+            if match:
+                r, g, b = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                return f"&H00{b:02X}{g:02X}{r:02X}"
+
+        # 处理十六进制格式
+        if hex_color.startswith("#"):
+            hex_color = hex_color[1:]
+
+        # 确保是6位十六进制
+        if len(hex_color) == 3:
+            hex_color = hex_color[0] * 2 + hex_color[1] * 2 + hex_color[2] * 2
+
+        if len(hex_color) == 6:
+            r = int(hex_color[0:2], 16)
+            g = int(hex_color[2:4], 16)
+            b = int(hex_color[4:6], 16)
+            # ASS 格式: BGR 顺序，前缀 &H00 表示不透明
+            return f"&H00{b:02X}{g:02X}{r:02X}"
+
+        # 默认返回白色
+        return "&H00FFFFFF"
+
     def _format_srt_time(self, seconds: float) -> str:
         """格式化 SRT 时间"""
         hours = int(seconds // 3600)

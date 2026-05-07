@@ -1,4 +1,0 @@
-# 界面端口
-gradio_port = 7861
-# api接口
-api_port = 80

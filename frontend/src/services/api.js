@@ -175,7 +175,10 @@ export const systemApi = {
 // 功能相关 API
 export const functionsApi = {
   // 提取视频首帧
-  extractFrame: (videoPath) => request.post('/api/extract-frame', { video_path: videoPath })
+  extractFrame: (videoPath) => request.post('/api/extract-frame', { video_path: videoPath }),
+
+  // 打开输出目录
+  openOutputDir: () => request.post('/api/open-output-dir')
 }
 
 // 标签相关 API

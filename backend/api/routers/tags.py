@@ -19,7 +19,7 @@ logger = logging.getLogger("autoavantar-api.tags")
 
 router = APIRouter()
 
-EMOTION_YAML_PATH = Path(__file__).parent.parent.parent.parent / "index-tts-2" / "emotion_mapping.yaml"
+EMOTION_YAML_PATH = Path(__file__).parent.parent.parent.parent / "voicel" / "emotion_mapping.yaml"
 
 
 class TagGroupCreate(BaseModel):

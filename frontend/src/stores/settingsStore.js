@@ -6,8 +6,6 @@ export const useSettingsStore = defineStore('settings', {
     settings: {
       deepseek_api_key: '',
       aliyun_api_key: '',
-      index_tts_port: 8080,
-      heygem_port: 8080,
       single_person_prompt_template: '根据主题{theme}生成单人讲解文案，包含开场、情绪标签、场景标签、结束',
       dual_person_prompt_template: '根据主题{theme}生成双人对话文案，包含开场、左边说话人、右边说话人、情绪标签、场景标签、结束',
       cover_prompt_template: '根据文案{summary}生成视频封面，风格简洁，突出主题',

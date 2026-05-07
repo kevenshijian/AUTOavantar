@@ -497,6 +497,8 @@ class TaskConfig:
     tts_emo_weight: float = 0.8
     left_tts_speed: Optional[float] = None
     right_tts_speed: Optional[float] = None
+    left_tts_emo_weight: Optional[float] = None
+    right_tts_emo_weight: Optional[float] = None
 
     # HeyGem配置
     heygem_steps: float = 16

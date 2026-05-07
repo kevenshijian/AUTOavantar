@@ -53,15 +53,9 @@ temp/
 tmp/
 py310/
 tf_download/
-heygem-win-50-onnx/pretrain_models/
-heygem-win-50-onnx/__pycache__/
-heygem-win-50-onnx/mel/
-heygem-win-50-onnx/model_lib/
-heygem-win-50-onnx/face_lib/
-heygem-win-50-onnx/landmark2face_wy/checkpoints/
-index-tts-2/checkpoints/
-index-tts-2/indextts/
-index-tts-2/outputs/
+voicel/checkpoints/
+voicel/indextts/
+voicel/outputs/
 *.mp4
 *.wav
 *.mp3
@@ -76,5 +70,22 @@ index-tts-2/outputs/
 shared_cache/
 specs/
 backend/tests/
-node-v24.15.0-win-x64/
+node-v24.0.0-win-x64/
 .gstack/
+
+# 打包产物
+AUTOavantar.spec
+git/
+nodejs/
+release/
+
+# voicel 模型文件
+voicel/checkpoints/
+voicel/indextts/
+voicel/outputs/
+
+# 私钥文件（不要提交到版本控制）
+config/license/private_key.pem
+
+# 打包输出目录（安装包不提交）
+release/installer/

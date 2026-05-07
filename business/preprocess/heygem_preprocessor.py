@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_CURRENT_DIR)  # business
 _PROJECT_ROOT = os.path.dirname(_PROJECT_ROOT)  # AUTOavantar (项目根)
-HEYGEM_PATH = os.path.join(_PROJECT_ROOT, "heygem-win-50-onnx")
+HEYGEM_PATH = os.path.join(_PROJECT_ROOT, "Portrait")
 
 if HEYGEM_PATH not in sys.path:
     sys.path.insert(0, HEYGEM_PATH)

@@ -17,25 +17,31 @@ router = APIRouter()
 
 class ConnectionManager:
     """WebSocket 连接管理器"""
-    
+
     def __init__(self):
         # 按 task_id 存储连接
         self.connections: Dict[str, Set[WebSocket]] = {}
         # 存储所有连接的最后活跃时间
         self.last_activity: Dict[WebSocket, datetime] = {}
+        # 存储等待连接的任务（用于竞态条件处理）
+        self._pending_connections: Dict[str, asyncio.Event] = {}
     
     async def connect(self, websocket: WebSocket, task_id: str):
         """建立连接"""
         await websocket.accept()
-        
+
         if task_id not in self.connections:
             self.connections[task_id] = set()
-        
+
         self.connections[task_id].add(websocket)
         self.last_activity[websocket] = datetime.now()
-        
+
         logger.info(f"WebSocket 连接建立: task_id={task_id}, 当前连接数: {len(self.connections[task_id])}")
-        
+
+        # 通知等待此任务连接的协程
+        if task_id in self._pending_connections:
+            self._pending_connections[task_id].set()
+
         # 发送欢迎消息
         await self.send_message(websocket, {
             "type": "connected",
@@ -148,6 +154,40 @@ class ConnectionManager:
                     self.disconnect(websocket, task_id)
                     logger.info(f"关闭不活跃连接: task_id={task_id}")
                     break
+
+    async def wait_for_connection(self, task_id: str, timeout: float = 3.0) -> bool:
+        """
+        等待指定任务的 WebSocket 连接建立
+
+        Args:
+            task_id: 任务ID
+            timeout: 超时时间（秒）
+
+        Returns:
+            是否在超时前建立了连接
+        """
+        # 如果已有连接，直接返回
+        if task_id in self.connections and self.connections[task_id]:
+            return True
+
+        # 创建等待事件
+        if task_id not in self._pending_connections:
+            self._pending_connections[task_id] = asyncio.Event()
+
+        try:
+            # 等待连接建立或超时
+            await asyncio.wait_for(
+                self._pending_connections[task_id].wait(),
+                timeout=timeout
+            )
+            return True
+        except asyncio.TimeoutError:
+            logger.warning(f"等待 WebSocket 连接超时: task_id={task_id}")
+            return False
+        finally:
+            # 清理等待事件
+            if task_id in self._pending_connections:
+                del self._pending_connections[task_id]
 
 
 # 全局连接管理器

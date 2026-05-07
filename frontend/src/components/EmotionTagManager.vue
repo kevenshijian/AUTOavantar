@@ -52,7 +52,7 @@
         <el-form-item label="向量参数">
           <div class="vec-grid">
             <div v-for="i in 8" :key="i" class="vec-field">
-              <span class="vec-label">v{{ i }}</span>
+              <span class="vec-label">{{ getVecLabel(i) }}</span>
               <el-input-number
                 v-model="newEmotionForm[`vec${i}`]"
                 :min="0"
@@ -88,7 +88,7 @@
         <el-form-item label="向量参数">
           <div class="vec-grid">
             <div v-for="i in 8" :key="i" class="vec-field">
-              <span class="vec-label">v{{ i }}</span>
+              <span class="vec-label">{{ getVecLabel(i) }}</span>
               <el-input-number
                 v-model="editEmotionForm[`vec${i}`]"
                 :min="0"
@@ -151,6 +151,11 @@ const editEmotionForm = ref({
 const getVecValues = (row) => {
   return [row.vec1, row.vec2, row.vec3, row.vec4, row.vec5, row.vec6, row.vec7, row.vec8]
     .map(v => v || 0)
+}
+
+const getVecLabel = (index) => {
+  const labels = ['高兴', '生气', '悲伤', '悲伤', '厌恶', '忧郁', '惊讶', '平静']
+  return labels[index - 1] || `v${index}`
 }
 
 const loadEmotions = async () => {
@@ -355,8 +360,9 @@ onMounted(() => {
   font-size: 13px;
   color: #909399;
   min-width: 20px;
-  text-align: right;
-  font-weight: 500;
+  text-align: center;
+  line-height: 24px;
+  font-weight: 900;
   font-family: 'Consolas', 'Monaco', monospace;
 }
 

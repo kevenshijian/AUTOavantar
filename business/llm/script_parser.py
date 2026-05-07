@@ -2,16 +2,58 @@
 文案解析器模块
 将 JSON 格式的文案解析为结构化的 ScriptSegment 列表
 支持单人和双人模式
+情绪向量参数统一从 voicel/emotion_mapping.yaml 加载
 """
 
 import json
 import logging
+import os
+import yaml
 from typing import Dict, List, Optional, Any, Union, Tuple
 from enum import Enum
+from pathlib import Path
 
 from core.models.task import ScriptSegment, SceneType, EmotionType
 
 logger = logging.getLogger(__name__)
+
+# 情绪映射配置（从 voicel/emotion_mapping.yaml 加载）
+_EMOTION_MAPPING_CACHE: Dict[str, Dict] = {}
+
+
+def _load_emotion_mapping() -> Dict[str, Dict]:
+    """
+    从 voicel/emotion_mapping.yaml 加载情绪映射配置
+    这是情绪向量参数的唯一来源
+
+    Returns:
+        情绪名称到参数配置的映射
+    """
+    global _EMOTION_MAPPING_CACHE
+
+    if _EMOTION_MAPPING_CACHE:
+        return _EMOTION_MAPPING_CACHE
+
+    # 查找 voicel 目录下的 emotion_mapping.yaml
+    project_root = Path(__file__).parent.parent.parent
+    voicel_dir = project_root / "voicel"
+
+    mapping_path = voicel_dir / "emotion_mapping.yaml"
+
+    if not mapping_path.exists():
+        logger.warning(f"未找到情绪映射文件: {mapping_path}")
+        return {}
+
+    try:
+        with open(mapping_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) or {}
+
+        _EMOTION_MAPPING_CACHE = config
+        logger.info(f"已加载情绪映射配置: {mapping_path}, 共 {len(config)} 种情绪")
+        return config
+    except Exception as e:
+        logger.error(f"加载情绪映射文件失败: {e}")
+        return {}
 
 
 def _parse_json_script(script_text: str) -> List[Tuple[str, Any]]:
@@ -66,42 +108,6 @@ class EmotionParams:
         }
 
 
-# 情绪标签到情绪类型和参数的完整映射（根据开发文档214-264行）
-EMOTION_CONFIG = {
-    # 场景标签 - 使用平静情绪
-    "开场": {"emotion": EmotionType.CALM, "params": EmotionParams(vec1=0.1, vec7=0.1)},
-    "结束": {"emotion": EmotionType.CALM, "params": EmotionParams(vec2=0.1, vec7=0.1)},
-    "环境展示": {"emotion": EmotionType.CALM, "params": EmotionParams(vec1=0.1, vec7=0.1)},
-    "产品展示": {"emotion": EmotionType.CALM, "params": EmotionParams(vec1=0.1, vec7=0.1)},
-    "细节展示": {"emotion": EmotionType.CALM, "params": EmotionParams(vec1=0.1, vec7=0.1)},
-    "功能介绍": {"emotion": EmotionType.CALM, "params": EmotionParams(vec1=0.1, vec7=0.1)},
-    "使用效果": {"emotion": EmotionType.CALM, "params": EmotionParams(vec1=0.1, vec7=0.1)},
-    
-    # 情绪标签
-    "开心": {"emotion": EmotionType.JOY, "params": EmotionParams(vec1=0.2), "similar": ["惊喜", "高兴"]},
-    "高兴": {"emotion": EmotionType.JOY, "params": EmotionParams(vec1=0.2, vec7=0.1), "similar": ["开心", "惊喜"]},
-    "生气": {"emotion": EmotionType.ANGER, "params": EmotionParams(vec2=0.2), "similar": ["愤怒", "激动"]},
-    "愤怒": {"emotion": EmotionType.ANGER, "params": EmotionParams(vec2=0.2, vec5=0.1), "similar": ["生气", "激动"]},
-    "激动": {"emotion": EmotionType.JOY, "params": EmotionParams(vec1=0.2, vec2=0.2), "similar": ["生气", "愤怒", "惊喜"]},
-    "难过": {"emotion": EmotionType.SADNESS, "params": EmotionParams(vec3=0.2), "similar": ["悲伤", "伤心"]},
-    "悲伤": {"emotion": EmotionType.SADNESS, "params": EmotionParams(vec3=0.2, vec6=0.1), "similar": ["难过", "伤心"]},
-    "伤心": {"emotion": EmotionType.SADNESS, "params": EmotionParams(vec3=0.2, vec4=0.2), "similar": ["悲伤", "难过"]},
-    "害怕": {"emotion": EmotionType.FEAR, "params": EmotionParams(vec4=0.3), "similar": ["恐惧", "惊慌"]},
-    "恐惧": {"emotion": EmotionType.FEAR, "params": EmotionParams(vec4=0.3, vec6=0.3), "similar": ["害怕", "惊慌"]},
-    "惊慌": {"emotion": EmotionType.FEAR, "params": EmotionParams(vec4=0.3, vec7=0.3), "similar": ["害怕", "恐惧"]},
-    "厌恶": {"emotion": EmotionType.DISGUST, "params": EmotionParams(vec5=0.3), "similar": ["讨厌", "憎恨"]},
-    "讨厌": {"emotion": EmotionType.DISGUST, "params": EmotionParams(vec5=0.3, vec6=0.2), "similar": ["厌恶", "憎恨"]},
-    "憎恨": {"emotion": EmotionType.DISGUST, "params": EmotionParams(vec5=0.3, vec2=0.2), "similar": ["讨厌", "厌恶"]},
-    "低落": {"emotion": EmotionType.DEPRESSION, "params": EmotionParams(vec6=0.3), "similar": ["忧伤", "沮丧"]},
-    "忧伤": {"emotion": EmotionType.DEPRESSION, "params": EmotionParams(vec6=0.3, vec3=0.2), "similar": ["沮丧", "低落"]},
-    "沮丧": {"emotion": EmotionType.DEPRESSION, "params": EmotionParams(vec6=0.3, vec8=0.2), "similar": ["忧伤", "低落"]},
-    "惊喜": {"emotion": EmotionType.SURPRISE, "params": EmotionParams(vec7=0.3), "similar": ["开心", "兴奋", "激动"]},
-    "兴奋": {"emotion": EmotionType.SURPRISE, "params": EmotionParams(vec7=0.3, vec2=0.2), "similar": ["激动", "惊喜"]},
-    "平淡": {"emotion": EmotionType.CALM, "params": EmotionParams(vec8=0.2, vec5=0.2), "similar": ["冷静"]},
-    "冷静": {"emotion": EmotionType.CALM, "params": EmotionParams(vec8=0.3), "similar": ["平淡"]},
-}
-
-
 # 场景标签映射
 SCENE_CONFIG = {
     "开场": SceneType.OPENING,
@@ -111,7 +117,7 @@ SCENE_CONFIG = {
 
 
 class EmotionLabel(Enum):
-    """情绪标签映射（向后兼容）"""
+    """情绪标签映射（向后兼容，用于获取 EmotionType）"""
     开场 = EmotionType.CALM
     兴奋 = EmotionType.SURPRISE
     开心 = EmotionType.JOY
@@ -209,15 +215,30 @@ class ScriptParser:
     def get_emotion_params_from_label(self, label: str) -> EmotionParams:
         """
         从标签获取情绪参数（vec1-vec8）
-        
+        从 voicel/emotion_mapping.yaml 读取（唯一来源）
+
         Args:
             label: 标签名称
-            
+
         Returns:
             EmotionParams: 情绪参数对象
         """
-        if label in EMOTION_CONFIG:
-            return EMOTION_CONFIG[label]["params"]
+        emotion_mapping = _load_emotion_mapping()
+
+        if label in emotion_mapping:
+            params = emotion_mapping[label]
+            if isinstance(params, dict):
+                return EmotionParams(
+                    vec1=params.get("vec1", 0.0),
+                    vec2=params.get("vec2", 0.0),
+                    vec3=params.get("vec3", 0.0),
+                    vec4=params.get("vec4", 0.0),
+                    vec5=params.get("vec5", 0.0),
+                    vec6=params.get("vec6", 0.0),
+                    vec7=params.get("vec7", 0.0),
+                    vec8=params.get("vec8", 0.0)
+                )
+
         return EmotionParams()  # 默认全部0.0
     
     def get_scene_from_label(self, label: str, default_scene: SceneType = SceneType.LOOP) -> SceneType:
@@ -241,14 +262,17 @@ class ScriptParser:
     def is_scene_label(self, label: str) -> bool:
         """
         判断是否为场景标签（不需要情绪参数）
-        
+        从 voicel/emotion_mapping.yaml 动态判断
+
         Args:
             label: 标签名称
-            
+
         Returns:
             bool: 是否为场景标签
         """
-        scene_labels = ["环境展示", "产品展示", "细节展示", "功能介绍", "使用效果", "开场", "结束"]
+        # 场景标签列表（从 emotion_mapping.yaml 中的标签推断）
+        # 这些标签主要用于场景描述，情绪表达较弱
+        scene_labels = ["环境展示", "产品展示", "细节展示", "功能介绍", "使用效果", "开场", "结束", "旁白视角"]
         return label in scene_labels
 
     def parse_single_script(self, parsed_pairs: Union[Dict, List[Tuple[str, Any]]]) -> List[ScriptSegment]:

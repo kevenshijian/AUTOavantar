@@ -40,13 +40,11 @@ class Settings(BaseSettings):
     # 任务配置
     TASK_POLL_INTERVAL: int = 3  # 轮询间隔（秒）
     MAX_CONCURRENT_TASKS: int = 3
-    
-    # 服务配置
-    TTS_HOST: str = "http://localhost:7860"
-    HEYGEM_HOST: str = "http://localhost:9889"
+
+    # LLM 配置
     LLM_PROVIDER: str = "deepseek"
     LLM_API_KEY: Optional[str] = None
-    
+
     # 路径配置
     BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     OUTPUT_DIR: str = "output"

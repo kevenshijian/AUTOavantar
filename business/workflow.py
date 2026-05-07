@@ -14,7 +14,8 @@ import yaml
 from core.models.task import Task, TaskStatus, TaskConfig, ScriptSegment, SceneType
 from core.scheduler import TaskScheduler
 from core.monitor import ResourceMonitor, get_monitor
-from core.service_manager import get_service_manager
+from core.engines import create_engines_from_config
+from core.paths import get_path_manager, init_path_manager
 from business.preprocess import VideoPreprocessor, quick_check_video
 from business.llm import ScriptParser, create_script_parser
 from business.llm.llm_generator import LLMScriptGenerator
@@ -25,6 +26,101 @@ from business.postprocess import PostProcessor, create_post_processor
 logger = logging.getLogger(__name__)
 
 PROMPT_TEMPLATES_PATH = os.path.join(os.path.dirname(__file__), "..", "backend", "config", "prompt_templates.yaml")
+
+
+def calculate_progress(
+    stage: str,
+    completed_items: int,
+    total_items: int,
+    sub_stage: str = None
+) -> float:
+    """
+    计算任务进度
+
+    Args:
+        stage: 当前阶段（script/audio/video/postprocess）
+        completed_items: 已完成的项目数
+        total_items: 总项目数
+        sub_stage: 子阶段（subtitle/bgm/cover）
+
+    Returns:
+        进度百分比（0-100）
+    """
+    stage_ranges = {
+        "script": (0, 10),
+        "audio": (10, 40),
+        "video": (40, 85),
+        "postprocess": (85, 100)
+    }
+
+    # 后期处理子阶段细分
+    if stage == "postprocess" and sub_stage:
+        sub_ranges = {
+            "subtitle": (85, 90),
+            "bgm": (90, 95),
+            "cover": (95, 100),
+            "merge": (85, 100)
+        }
+        sub_start, sub_end = sub_ranges.get(sub_stage, (85, 100))
+        return min(100, max(0, sub_start))
+
+    start, end = stage_ranges.get(stage, (0, 100))
+
+    if total_items > 0:
+        stage_progress = completed_items / total_items
+        progress = start + (end - start) * stage_progress
+    else:
+        progress = start
+
+    return min(100, max(0, round(progress, 1)))
+
+
+def build_stage_description(
+    stage: str,
+    completed_items: int,
+    total_items: int,
+    current_tag: str = None,
+    sub_stage: str = None
+) -> str:
+    """
+    构建阶段描述
+
+    Args:
+        stage: 当前阶段
+        completed_items: 已完成的项目数
+        total_items: 总项目数
+        current_tag: 当前处理的标签
+        sub_stage: 子阶段
+
+    Returns:
+        阶段描述字符串
+    """
+    if stage == "script":
+        return "文案生成中..."
+
+    if stage == "audio":
+        if current_tag:
+            return f"语音合成中 ({completed_items}/{total_items}) - 处理标签：{current_tag}"
+        return f"语音合成中 ({completed_items}/{total_items})"
+
+    if stage == "video":
+        if current_tag:
+            return f"视频生成中 ({completed_items}/{total_items}) - 处理标签：{current_tag}"
+        return f"视频生成中 ({completed_items}/{total_items})"
+
+    if stage == "postprocess":
+        sub_descriptions = {
+            "subtitle": "添加字幕...",
+            "bgm": "添加 BGM...",
+            "cover": "生成封面...",
+            "merge": "合并视频..."
+        }
+        return sub_descriptions.get(sub_stage, "后期处理中...")
+
+    if stage == "completed":
+        return "任务完成"
+
+    return "处理中..."
 
 
 @dataclass
@@ -43,29 +139,40 @@ class DigitalHumanWorkflow:
 
     def __init__(
         self,
-        tts_host: str = "http://localhost:7860",
-        heygem_host: str = "http://localhost:9889",
+        tts_engine=None,
+        heygem_engine=None,
         llm_config: Optional[Dict] = None,
         output_dir: str = "output",
-        qwen_api_key: Optional[str] = None
+        qwen_api_key: Optional[str] = None,
+        low_memory_mode: bool = False
     ):
         """
         初始化工作流
 
         Args:
-            tts_host: IndexTTS 服务地址
-            heygem_host: HeyGem 服务地址
+            tts_engine: TTSEngine 实例
+            heygem_engine: HeyGemEngine 实例
             llm_config: LLM 配置
-            output_dir: 输出目录
+            output_dir: 输出目录（已废弃，使用路径管理器）
             qwen_api_key: Qwen-Image API 密钥（用于封面生成）
+            low_memory_mode: 是否启用低显存模式（开启时阶段完成后卸载模型）
         """
-        self.tts_host = tts_host
-        self.heygem_host = heygem_host
+        self.tts_engine = tts_engine
+        self.heygem_engine = heygem_engine
         self.llm_config = llm_config or {}
-        self.output_dir = output_dir
         self.qwen_api_key = qwen_api_key
+        self.low_memory_mode = low_memory_mode
 
-        # 初始化各模块
+        # 初始化路径管理器
+        self.path_manager = get_path_manager()
+
+        # 使用路径管理器的目录
+        self.output_dir = self.path_manager.output_dir
+        self.audio_temp_dir = self.path_manager.audio_temp_dir
+        self.video_temp_dir = self.path_manager.video_temp_dir
+        self.final_output_dir = self.path_manager.final_output_dir
+
+        # 初始化各模块（使用绝对路径）
         self.video_preprocessor = VideoPreprocessor()
         self.llm_generator = LLMScriptGenerator(
             provider=self.llm_config.get("provider", "deepseek"),
@@ -74,23 +181,23 @@ class DigitalHumanWorkflow:
         )
         self.script_parser = create_script_parser()
         self.audio_processor = create_audio_processor(
-            tts_host=self.tts_host,
-            output_dir=os.path.join(output_dir, "temp/audio"),
+            tts_engine=self.tts_engine,
+            output_dir=self.audio_temp_dir,
             enable_denoise=False  # 降噪由用户手动执行，不再自动执行
         )
         self.video_synthesizer = create_video_synthesizer(
-            heygem_host=self.heygem_host,
-            output_dir=os.path.join(output_dir, "temp/video")
+            heygem_engine=self.heygem_engine,
+            output_dir=self.video_temp_dir
         )
         self.post_processor = create_post_processor(
-            output_dir=output_dir,
+            output_dir=self.final_output_dir,
             qwen_api_key=self.qwen_api_key
         )
-        
+
         self.resource_monitor = get_monitor()
-        
+
         self.db = None
-        logger.info("数字人工作流初始化完成")
+        logger.info(f"数字人工作流初始化完成（引擎模式），低显存模式: {low_memory_mode}")
     
     def set_database(self, db):
         """设置数据库实例用于断点续传"""
@@ -391,9 +498,9 @@ class DigitalHumanWorkflow:
             # 步骤 2.5: 参考音频语速调节
             logger.info("步骤 2.5/5: 参考音频语速调节")
             from business.audio.audio_speed_processor import create_audio_speed_processor
-            
-            # 创建语速处理器
-            speed_processor = create_audio_speed_processor(os.path.join(self.output_dir, "temp/audio"))
+
+            # 创建语速处理器（使用路径管理器的音频目录）
+            speed_processor = create_audio_speed_processor(self.audio_temp_dir)
             
             if speed_processor:
                 if config.enable_double_mode:
@@ -461,17 +568,30 @@ class DigitalHumanWorkflow:
             elif audio_already_completed:
                 logger.info("音频已从检查点恢复完成，跳过音频合成阶段")
             else:
-                # 低显存模式：确保 IndexTTS 运行（仅在需要执行音频合成时启动）
-                if not self._ensure_service_for_stage("audio"):
-                    raise Exception("IndexTTS 服务启动失败，无法进行音频合成")
+                # 确保引擎已加载
+                if self.tts_engine and not self.tts_engine.is_loaded:
+                    logger.info("加载 TTSEngine...")
+                    if not self.tts_engine.load():
+                        raise Exception("TTSEngine 加载失败，无法进行音频合成")
 
                 logger.info("步骤 3/5: 语音合成")
                 task.status = TaskStatus.TTS_SYNTHESIZING
-                task.progress = 15
+                task.progress = 10
                 if progress_callback:
-                    progress_callback(15, "语音合成中")
+                    progress_callback(10, "语音合成中...")
 
-                audio_results = self.audio_processor.synthesize_all(task, config, cancel_callback=cancel_callback)
+                # 定义音频合成进度回调
+                def audio_progress_callback(completed, total, tag):
+                    if progress_callback:
+                        progress = calculate_progress("audio", completed, total)
+                        description = build_stage_description("audio", completed, total, tag)
+                        progress_callback(progress, description)
+
+                audio_results = self.audio_processor.synthesize_all(
+                    task, config,
+                    cancel_callback=cancel_callback,
+                    progress_callback=audio_progress_callback
+                )
                 failed_audio = [r for r in audio_results if r.status == "failed"]
                 if failed_audio:
                     logger.warning(f"部分段落合成失败：{len(failed_audio)}/{len(audio_results)}")
@@ -504,9 +624,18 @@ class DigitalHumanWorkflow:
                     error_message="任务被取消"
                 )
             
-            # 步骤 3.5: 卸载 IndexTTS 模型，释放 GPU 显存给 HeyGem
-            logger.info("步骤 3.5/5: 卸载 IndexTTS 模型，释放 GPU 显存")
-            self._unload_indextts_model()
+            # 步骤 3.5: 卸载 TTS 引擎，释放 GPU 显存给 HeyGem
+            # CR-026: 只在低显存模式开启时才卸载
+            # 注意：无论音频阶段是新执行还是从检查点恢复，都需要检查是否需要卸载
+            if self.low_memory_mode:
+                logger.info("步骤 3.5/5: 卸载 TTS 引擎，释放 GPU 显存")
+                self._unload_tts_if_low_memory_mode()
+                # 等待 GPU 显存完全释放
+                import time
+                time.sleep(1.0)
+                logger.info("GPU 显存已释放，准备加载 HeyGem")
+            else:
+                logger.info("步骤 3.5/5: 低显存模式关闭，保持 TTS 引擎加载")
             
             # 检查是否取消
             if cancel_callback and cancel_callback():
@@ -542,20 +671,42 @@ class DigitalHumanWorkflow:
             
             if skip_to_stage and skip_to_stage in ["post_processing"]:
                 logger.info(f"跳过视频生成阶段，从 {skip_to_stage} 继续")
+                # CR-026: 即使跳过视频阶段，也需要检查是否卸载 HeyGem
+                # 如果从检查点恢复且视频已完成，HeyGem 可能已加载，需要卸载
+                if self.low_memory_mode:
+                    logger.info("步骤 4.5/5: 卸载 HeyGem 引擎（视频阶段已跳过）")
+                    self._cleanup_heygem_gpu()
             elif video_already_completed:
                 logger.info("视频已从检查点恢复完成，跳过视频生成阶段")
+                # CR-026: 视频已完成，需要卸载 HeyGem
+                if self.low_memory_mode:
+                    logger.info("步骤 4.5/5: 卸载 HeyGem 引擎（视频已完成）")
+                    self._cleanup_heygem_gpu()
             else:
-                # 低显存模式：确保 HeyGem 运行（仅在需要执行视频生成时启动）
-                if not self._ensure_service_for_stage("video"):
-                    raise Exception("HeyGem 服务启动失败，无法进行视频生成")
+                # 确保引擎已加载
+                if self.heygem_engine and not self.heygem_engine.is_loaded:
+                    logger.info("加载 HeyGemEngine...")
+                    if not self.heygem_engine.load():
+                        raise Exception("HeyGemEngine 加载失败，无法进行视频生成")
 
                 logger.info("步骤 4/5: 视频生成")
                 task.status = TaskStatus.HEYGEM_GENERATING
-                task.progress = 45
+                task.progress = 40
                 if progress_callback:
-                    progress_callback(45, "视频生成中")
+                    progress_callback(40, "视频生成中...")
 
-                video_results = self.video_synthesizer.generate_all(task, config, cancel_callback=cancel_callback)
+                # 定义视频生成进度回调
+                def video_progress_callback(completed, total, tag):
+                    if progress_callback:
+                        progress = calculate_progress("video", completed, total)
+                        description = build_stage_description("video", completed, total, tag)
+                        progress_callback(progress, description)
+
+                video_results = self.video_synthesizer.generate_all(
+                    task, config,
+                    cancel_callback=cancel_callback,
+                    progress_callback=video_progress_callback
+                )
                 failed_video = [r for r in video_results if r.status == "failed"]
                 if failed_video:
                     logger.warning(f"部分视频生成失败：{len(failed_video)}/{len(video_results)}")
@@ -597,9 +748,13 @@ class DigitalHumanWorkflow:
             # 步骤 5: 后期处理（视频合并是必须的，字幕等是可选的）
             logger.info("步骤 5/5: 后期处理")
             task.status = TaskStatus.POST_PROCESSING
-            task.progress = 90
+            task.progress = 85
             if progress_callback:
-                progress_callback(90, "后期处理中")
+                progress_callback(85, "后期处理中...")
+
+            # 后期处理子阶段进度更新
+            if progress_callback:
+                progress_callback(87, build_stage_description("postprocess", 0, 0, None, "subtitle"))
 
             post_result = self.post_processor.process(task, config)
 
@@ -641,21 +796,26 @@ class DigitalHumanWorkflow:
             
             # 保存最终结果
             self.save_task_checkpoint(task, config)
-            
+
             task.progress = 95
             if progress_callback:
-                progress_callback(95, "后期处理完成")
+                progress_callback(95, build_stage_description("postprocess", 0, 0, None, "merge"))
 
             # 任务完成
             task.status = TaskStatus.COMPLETED
             task.progress = 100
             if progress_callback:
-                progress_callback(100, "任务完成")
-            
-            # 低显存模式：任务完成后停止服务
-            self._cleanup_services_after_task()
+                progress_callback(100, build_stage_description("completed", 0, 0))
 
             logger.info(f"任务 {task.task_id} 完成: {task.output_video_path}")
+
+            # 清理双人模式中间文件
+            self._cleanup_intermediate_files(task)
+
+            # CR-026: 低显存模式下，任务完成后卸载所有模型
+            if self.low_memory_mode:
+                logger.info("步骤 6/5: 任务完成，卸载所有模型释放显存")
+                self._cleanup_all_engines()
 
             return WorkflowResult(
                 task_id=task.task_id,
@@ -669,12 +829,14 @@ class DigitalHumanWorkflow:
             logger.error(f"任务 {task.task_id} 失败: {e}")
             task.status = TaskStatus.FAILED
             task.error_message = str(e)
-            
-            # 低显存模式：任务失败时也停止服务
-            self._cleanup_services_after_task()
-            
+
             # 保存失败状态
             self.save_task_checkpoint(task, config)
+
+            # CR-026: 低显存模式下，任务失败后也要卸载所有模型
+            if self.low_memory_mode:
+                logger.info("任务失败，卸载所有模型释放显存")
+                self._cleanup_all_engines()
 
             return WorkflowResult(
                 task_id=task.task_id,
@@ -836,27 +998,6 @@ class DigitalHumanWorkflow:
         """预处理视频"""
         normalized_path = self._normalize_video_path(video_path)
         return quick_check_video(normalized_path)
-
-    def _unload_indextts_model(self) -> None:
-        """
-        卸载 IndexTTS 模型，释放 GPU 显存。
-
-        在 TTS 完成后、HeyGem 视频生成前调用，确保 HeyGem 有充足的显存。
-        卸载失败不阻塞工作流，仅记录警告日志。
-        """
-        try:
-            tts_client = self.audio_processor.tts_client
-            if tts_client is None:
-                logger.warning("TTS 客户端未初始化，跳过模型卸载")
-                return
-
-            result = tts_client.unload_model()
-            if result.get("success"):
-                logger.info(f"IndexTTS 模型卸载成功: {result.get('message', '')}")
-            else:
-                logger.warning(f"IndexTTS 模型卸载失败: {result.get('message', '未知错误')}")
-        except Exception as e:
-            logger.warning(f"IndexTTS 模型卸载异常（不阻塞工作流）: {e}")
 
     def _preprocess_face_alignment(self, video_path: str) -> Optional[str]:
         """
@@ -1132,148 +1273,131 @@ class DigitalHumanWorkflow:
             use_llm_generate=False
         )
 
-    def _cleanup_heygem_gpu(self):
-        """释放 HeyGem 服务的 GPU 显存（工作流级别，所有视频生成完成后调用一次）"""
-        try:
-            if hasattr(self, 'video_synthesizer') and self.video_synthesizer:
-                heygem_client = getattr(self.video_synthesizer, 'heygem_client', None)
-                if heygem_client and hasattr(heygem_client, 'cleanup_gpu'):
-                    heygem_client.cleanup_gpu()
-                    logger.info("[Workflow] HeyGem GPU 显存清理完成")
-        except Exception as e:
-            logger.debug(f"[Workflow] HeyGem GPU 清理失败（不影响主流程）: {e}")
+    def _unload_tts_if_low_memory_mode(self):
+        """
+        在低显存模式下卸载 TTS 引擎
 
-    def _ensure_service_for_stage(self, stage: str, max_retries: int = 2) -> bool:
-        """确保指定阶段所需的服务已启动（低显存模式专用）
+        AC-227: 低显存模式开启时音频合成完成后卸载 TTS 模型
+        AC-229: 低显存模式关闭时 TTS 模型保持常驻
+        """
+        if not self.low_memory_mode:
+            logger.debug("[Workflow] 低显存模式关闭，保持 TTS 引擎加载")
+            return
+
+        try:
+            if self.tts_engine and self.tts_engine.is_loaded:
+                self.tts_engine.unload()
+                logger.info("[Workflow] TTSEngine 已卸载，GPU 显存已释放")
+        except Exception as e:
+            logger.debug(f"[Workflow] TTS 引擎卸载失败（不影响主流程）: {e}")
+
+    def _cleanup_heygem_gpu(self):
+        """
+        释放 HeyGem 引擎的 GPU 显存（工作流级别，所有视频生成完成后调用一次）
+
+        CR-026: 只在低显存模式开启时才卸载
+        AC-228: 低显存模式开启时视频合成完成后卸载 HeyGem 模型
+        AC-229: 低显存模式关闭时 HeyGem 模型保持常驻
+        """
+        if not self.low_memory_mode:
+            logger.debug("[Workflow] 低显存模式关闭，保持 HeyGem 引擎加载")
+            return
+
+        try:
+            if self.heygem_engine and self.heygem_engine.is_loaded:
+                self.heygem_engine.unload()
+                logger.info("[Workflow] HeyGemEngine 已卸载，GPU 显存已释放")
+                # 等待 GPU 显存完全释放
+                import time
+                time.sleep(1.0)
+        except Exception as e:
+            logger.debug(f"[Workflow] HeyGem 引擎卸载失败（不影响主流程）: {e}")
+
+    def _cleanup_all_engines(self):
+        """
+        卸载所有引擎（任务完成后调用）
+
+        CR-026: 低显存模式下，任务完成后卸载所有模型
+        确保显存完全释放到基准水平
+        """
+        import gc
+        import time
+
+        logger.info("[Workflow] 开始卸载所有引擎...")
+
+        # 1. 卸载 TTS 引擎
+        try:
+            if self.tts_engine and self.tts_engine.is_loaded:
+                self.tts_engine.unload()
+                logger.info("[Workflow] TTSEngine 已卸载")
+        except Exception as e:
+            logger.warning(f"[Workflow] TTS 引擎卸载失败: {e}")
+
+        # 2. 卸载 HeyGem 引擎
+        try:
+            if self.heygem_engine and self.heygem_engine.is_loaded:
+                self.heygem_engine.unload()
+                logger.info("[Workflow] HeyGemEngine 已卸载")
+        except Exception as e:
+            logger.warning(f"[Workflow] HeyGem 引擎卸载失败: {e}")
+
+        # 3. 清理 CUDA 缓存
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                logger.info("[Workflow] CUDA 缓存已清理")
+        except ImportError:
+            pass
+
+        # 4. 多次垃圾回收
+        gc.collect()
+        gc.collect()
+        gc.collect()
+
+        # 5. 等待 GPU 显存完全释放
+        time.sleep(1.5)
+
+        logger.info("[Workflow] 所有引擎已卸载，显存已完全释放")
+
+    def _cleanup_intermediate_files(self, task: Task):
+        """
+        清理任务产生的中间文件
+
+        包括：
+        - 双人模式中间文件
+        - 静音文件
+        - 其他临时文件
 
         Args:
-            stage: 阶段名称 ("audio" 或 "video")
-            max_retries: 最大重试次数（默认 2 次）
-
-        Returns:
-            bool: 是否成功确保服务可用
+            task: 任务对象
         """
-        from core.system_config import get_config_manager
-        import concurrent.futures
+        cleaned_count = 0
 
-        # 检查是否启用低显存模式
-        config_manager = get_config_manager()
-        if not config_manager.get_low_memory_mode():
-            # 低显存模式 OFF，不执行服务切换逻辑
-            return True
+        # 1. 清理双人模式中间文件
+        if hasattr(task, '_double_mode_intermediate_files') and task._double_mode_intermediate_files:
+            for file_path in task._double_mode_intermediate_files:
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        cleaned_count += 1
+                        logger.debug(f"已清理中间文件: {file_path}")
+                except Exception as e:
+                    logger.warning(f"清理中间文件失败 {file_path}: {e}")
+            logger.info(f"已清理 {cleaned_count} 个双人模式中间文件")
+            task._double_mode_intermediate_files = []
 
-        service_manager = get_service_manager()
-        if not service_manager:
-            logger.warning("ServiceManager 未初始化，无法切换服务")
-            return True  # 不阻塞任务执行
-
-        def _stop_service_with_retry(service_name: str) -> bool:
-            """停止服务（带强制清理）"""
-            import time
-            status = service_manager.get_status(service_name)
-            if status.get("status") != "running":
-                return True
-
-            logger.info(f"[低显存模式] 停止 {service_name} 服务...")
-            success = service_manager.stop_service(service_name)
-            if success:
-                time.sleep(3)  # 等待服务完全停止
-                return True
-
-            # 停止失败，尝试强制清理
-            logger.warning(f"[低显存模式] {service_name} 停止失败，尝试强制清理...")
-            time.sleep(2)
-            return service_manager.stop_service(service_name)
-
-        def _start_service_with_retry(service_name: str, max_retries: int) -> bool:
-            """启动服务（带重试机制）"""
-            import time
-
-            for attempt in range(max_retries + 1):
-                # 先检查是否已经在运行
-                status = service_manager.get_status(service_name)
-                if status.get("status") == "running":
-                    logger.info(f"[低显存模式] {service_name} 已在运行中")
-                    return True
-
-                logger.info(f"[低显存模式] 启动 {service_name} 服务... (尝试 {attempt + 1}/{max_retries + 1})")
-                success = service_manager.start_service(service_name)
-
-                if success:
-                    logger.info(f"[低显存模式] {service_name} 启动成功")
-                    return True
-
-                # 启动失败，尝试清理后重试
-                if attempt < max_retries:
-                    logger.warning(f"[低显存模式] {service_name} 启动失败，清理后重试...")
-                    # 强制停止可能残留的进程
-                    service_manager.stop_service(service_name)
-                    time.sleep(3)  # 等待端口释放
-
-            logger.error(f"[低显存模式] {service_name} 启动失败（已重试 {max_retries} 次）")
-            return False
-
-        # 在线程池中执行阻塞操作，避免阻塞事件循环
-        def _do_service_switch():
-            if stage == "audio":
-                # 音频阶段：确保 IndexTTS 运行，停止 HeyGem
-                logger.info("[低显存模式] 音频阶段：启动 IndexTTS，停止 HeyGem")
-
-                # 停止 HeyGem（释放显存）
-                _stop_service_with_retry("heygem")
-
-                # 启动 IndexTTS（带重试）
-                if not _start_service_with_retry("indextts", max_retries):
-                    return False
-
-                return True
-
-            elif stage == "video":
-                # 视频阶段：确保 HeyGem 运行，停止 IndexTTS
-                logger.info("[低显存模式] 视频阶段：停止 IndexTTS，启动 HeyGem")
-
-                # 停止 IndexTTS（释放显存）
-                _stop_service_with_retry("indextts")
-
-                # 启动 HeyGem（带重试）
-                if not _start_service_with_retry("heygem", max_retries):
-                    return False
-
-                return True
-
-            return True
-
-        # 直接执行服务切换（不使用线程池）
-        # 因为 workflow.run() 本身应该在线程池中运行
-        return _do_service_switch()
-
-    def _cleanup_services_after_task(self):
-        """任务完成后清理服务（低显存模式专用）"""
-        from core.system_config import get_config_manager
-
-        # 检查是否启用低显存模式
-        config_manager = get_config_manager()
-        if not config_manager.get_low_memory_mode():
-            # 低显存模式 OFF，不执行服务清理
-            return
-
-        service_manager = get_service_manager()
-        if not service_manager:
-            return
-
-        logger.info("[低显存模式] 任务完成，停止所有服务")
-
-        # 停止 IndexTTS
-        indextts_status = service_manager.get_status("indextts")
-        if indextts_status.get("status") == "running":
-            logger.info("[低显存模式] 停止 IndexTTS 服务...")
-            service_manager.stop_service("indextts")
-
-        # 停止 HeyGem
-        heygem_status = service_manager.get_status("heygem")
-        if heygem_status.get("status") == "running":
-            logger.info("[低显存模式] 停止 HeyGem 服务...")
-            service_manager.stop_service("heygem")
+        # 2. 清理静音文件（UUID 命名的临时文件）
+        if hasattr(task, '_silence_files') and task._silence_files:
+            for file_path in task._silence_files:
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        logger.debug(f"已清理静音文件: {file_path}")
+                except Exception as e:
+                    logger.warning(f"清理静音文件失败 {file_path}: {e}")
 
     def close(self):
         """关闭所有模块"""
@@ -1377,42 +1501,13 @@ class DigitalHumanWorkflow:
             
             checkpoint_json = checkpoint.to_json()
 
-            import asyncio
-            import concurrent.futures
-
-            # 检查是否在异步上下文中
-            try:
-                loop = asyncio.get_running_loop()
-                in_async_context = True
-            except RuntimeError:
-                in_async_context = False
-
-            if asyncio.iscoroutinefunction(self.db.checkpoint_save):
-                if in_async_context:
-                    # 在异步上下文中，使用 run_coroutine_threadsafe 或直接 await
-                    # 由于 workflow.run() 是同步方法，我们需要在线程池中运行
-                    # 但要注意：aiosqlite 连接不是线程安全的
-                    # 解决方案：创建一个新的同步数据库操作
-                    try:
-                        # 尝试使用线程池执行，但设置较短超时
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            future = executor.submit(
-                                self._sync_checkpoint_save,
-                                task.task_id,
-                                checkpoint_json
-                            )
-                            result = future.result(timeout=10)
-                            logger.info(f"检查点保存结果: {result}")
-                    except Exception as e:
-                        logger.error(f"保存检查点异常: {e}")
-                        # 失败不阻塞主流程
-                else:
-                    # 不在异步上下文中，直接运行
-                    result = asyncio.run(self.db.checkpoint_save(task.task_id, checkpoint_json))
-                    logger.info(f"检查点保存结果: {result}")
+            # 统一使用同步数据库操作，避免 asyncio.run() 和线程池带来的问题
+            # aiosqlite 连接不是线程安全的，直接使用原生 sqlite3 更可靠
+            result = self._sync_checkpoint_save(task.task_id, checkpoint_json)
+            if result:
+                logger.info(f"检查点保存成功: {task.task_id}")
             else:
-                result = self.db.checkpoint_save(task.task_id, checkpoint_json)
-                logger.info(f"检查点保存结果: {result}")
+                logger.warning(f"检查点保存失败，但不阻塞主流程: {task.task_id}")
             
             logger.info(f"检查点已保存: {task.task_id}, 阶段: {checkpoint.current_stage}")
             
@@ -1575,33 +1670,52 @@ class DigitalHumanWorkflow:
 
 # 便捷函数
 def create_workflow(
-    tts_host: str = "http://localhost:7860",
-    heygem_host: str = "http://localhost:9889",
+    tts_engine=None,
+    heygem_engine=None,
     llm_provider: str = "deepseek",
     llm_api_key: str = "",
     output_dir: str = "output",
-    qwen_api_key: Optional[str] = None
+    qwen_api_key: Optional[str] = None,
+    low_memory_mode: bool = False
 ) -> DigitalHumanWorkflow:
-    """创建工作流的便捷函数"""
+    """创建工作流的便捷函数（引擎模式）
+
+    Args:
+        tts_engine: TTSEngine 实例，如果为 None 则从配置创建
+        heygem_engine: HeyGemEngine 实例，如果为 None 则从配置创建
+        llm_provider: LLM 提供商
+        llm_api_key: LLM API 密钥
+        output_dir: 输出目录
+        qwen_api_key: Qwen API 密钥
+        low_memory_mode: 是否启用低显存模式
+
+    Returns:
+        DigitalHumanWorkflow 实例
+    """
+    # 如果未提供引擎，从配置创建
+    if tts_engine is None or heygem_engine is None:
+        engines = create_engines_from_config(low_memory_mode=low_memory_mode)
+        tts_engine = tts_engine or engines.get("tts_engine")
+        heygem_engine = heygem_engine or engines.get("heygem_engine")
+
     return DigitalHumanWorkflow(
-        tts_host=tts_host,
-        heygem_host=heygem_host,
+        tts_engine=tts_engine,
+        heygem_engine=heygem_engine,
         llm_config={
             "provider": llm_provider,
             "api_key": llm_api_key
         },
         output_dir=output_dir,
-        qwen_api_key=qwen_api_key
+        qwen_api_key=qwen_api_key,
+        low_memory_mode=low_memory_mode
     )
 
 
 # 简单使用示例
 def main():
     """简单示例"""
-    # 创建工作流
+    # 创建工作流（引擎模式）
     workflow = create_workflow(
-        tts_host="http://localhost:7860",
-        heygem_host="http://localhost:9889",
         llm_provider="deepseek",
         llm_api_key="your-api-key"
     )

@@ -1,0 +1,22 @@
+# 引擎配置文件
+# 用于 create_engines_from_config() 函数读取
+
+# TTS 引擎配置
+tts:
+  # IndexTTS 配置文件路径
+  cfg_path: voicel/checkpoints/config.yaml
+  # IndexTTS 模型目录
+  model_dir: voicel/checkpoints
+  # 是否使用 FP16 精度
+  use_fp16: true
+  # 是否由 GPUResourceManager 管理
+  managed: true
+
+# HeyGem 引擎配置
+heygem:
+  # HeyGem 根目录
+  heygem_root: engines/heygem
+  # 批处理大小
+  batch_size: 4
+  # 是否由 GPUResourceManager 管理
+  managed: true

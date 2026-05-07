@@ -324,7 +324,7 @@
                   </el-col>
                   <el-col :span="12">
                     <el-form-item label="情感权重">
-                      <el-slider v-model="taskForm.audioParams.ttsEmoWeight" :min="0" :max="1.6" :step="0.1" />
+                      <el-slider v-model="taskForm.audioParams.ttsEmoWeight" :min="0.1" :max="1.2" :step="0.1" />
                       <div class="slider-value">{{ taskForm.audioParams.ttsEmoWeight }}</div>
                     </el-form-item>
                   </el-col>
@@ -343,7 +343,7 @@
                     </el-col>
                     <el-col :span="12">
                       <el-form-item label="情感权重">
-                        <el-slider v-model="taskForm.leftAudioParams.ttsEmoWeight" :min="0" :max="1.6" :step="0.1" />
+                        <el-slider v-model="taskForm.leftAudioParams.ttsEmoWeight" :min="0.1" :max="1.2" :step="0.1" />
                         <div class="slider-value">{{ taskForm.leftAudioParams.ttsEmoWeight }}</div>
                       </el-form-item>
                     </el-col>
@@ -361,7 +361,7 @@
                     </el-col>
                     <el-col :span="12">
                       <el-form-item label="情感权重">
-                        <el-slider v-model="taskForm.rightAudioParams.ttsEmoWeight" :min="0" :max="1.6" :step="0.1" />
+                        <el-slider v-model="taskForm.rightAudioParams.ttsEmoWeight" :min="0.1" :max="1.2" :step="0.1" />
                         <div class="slider-value">{{ taskForm.rightAudioParams.ttsEmoWeight }}</div>
                       </el-form-item>
                     </el-col>
@@ -1650,14 +1650,16 @@ const submitTask = async (runImmediately) => {
       enable_postprocess: taskForm.postProcessing.length > 0,
       enable_denoise: true,
       denoise_strength: 0.7,
-      tts_speed: taskForm.videoParams.dualMode 
-        ? taskForm.leftAudioParams.ttsSpeed 
+      tts_speed: taskForm.videoParams.dualMode
+        ? taskForm.leftAudioParams.ttsSpeed
         : taskForm.audioParams.ttsSpeed,
-      tts_emo_weight: taskForm.videoParams.dualMode 
-        ? taskForm.leftAudioParams.ttsEmoWeight 
+      tts_emo_weight: taskForm.videoParams.dualMode
+        ? taskForm.leftAudioParams.ttsEmoWeight
         : taskForm.audioParams.ttsEmoWeight,
       left_tts_speed: taskForm.videoParams.dualMode ? taskForm.leftAudioParams.ttsSpeed : null,
       right_tts_speed: taskForm.videoParams.dualMode ? taskForm.rightAudioParams.ttsSpeed : null,
+      left_tts_emo_weight: taskForm.videoParams.dualMode ? taskForm.leftAudioParams.ttsEmoWeight : null,
+      right_tts_emo_weight: taskForm.videoParams.dualMode ? taskForm.rightAudioParams.ttsEmoWeight : null,
       enable_subtitle: taskForm.postProcessing.includes('subtitle'),
       subtitle_font: taskForm.subtitleParams.font,
       subtitle_size: taskForm.subtitleParams.fontSize,

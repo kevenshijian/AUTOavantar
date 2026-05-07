@@ -13,6 +13,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from api.services.database import init_database, close_database
 from api.services.workflow_service import init_workflow_service, shutdown_workflow_service
@@ -33,6 +35,69 @@ setup_logging()
 logger = logging.getLogger("autoavantar-api")
 
 
+def suppress_asyncio_connection_errors():
+    """
+    抑制 Windows 平台上 asyncio ProactorEventLoop 的 ConnectionResetError
+
+    这是 Windows 平台上 asyncio 的已知问题，发生在管道连接关闭时。
+    参考: https://bugs.python.org/issue43254
+    """
+    if sys.platform == 'win32':
+        # 保存原始的异常处理器
+        original_handler = asyncio.get_event_loop().get_exception_handler()
+
+        def custom_exception_handler(loop, context):
+            """自定义异常处理器，忽略 ConnectionResetError"""
+            exception = context.get('exception')
+            if exception:
+                # 忽略 ConnectionResetError (WinError 10054)
+                if isinstance(exception, ConnectionResetError):
+                    return
+                # 忽略管道关闭相关的错误
+                if 'ConnectionResetError' in str(exception) or 'WinError 10054' in str(exception):
+                    return
+            # 其他异常使用原始处理器
+            if original_handler:
+                original_handler(loop, context)
+            else:
+                loop.default_exception_handler(context)
+
+        # 设置自定义异常处理器
+        try:
+            asyncio.get_event_loop().set_exception_handler(custom_exception_handler)
+        except RuntimeError:
+            # 如果没有事件循环，稍后在 lifespan 中设置
+            pass
+
+
+def setup_asyncio_exception_handler():
+    """在事件循环创建后设置异常处理器"""
+    if sys.platform == 'win32':
+        try:
+            loop = asyncio.get_running_loop()
+
+            def custom_exception_handler(loop, context):
+                """自定义异常处理器，忽略 ConnectionResetError"""
+                exception = context.get('exception')
+                if exception:
+                    # 忽略 ConnectionResetError (WinError 10054)
+                    if isinstance(exception, ConnectionResetError):
+                        logger.debug(f"忽略预期的连接关闭异常: {exception}")
+                        return
+                    # 检查异常消息
+                    exc_str = str(exception)
+                    if 'ConnectionResetError' in exc_str or 'WinError 10054' in exc_str or '远程主机强迫关闭' in exc_str:
+                        logger.debug(f"忽略预期的连接关闭异常: {exception}")
+                        return
+                # 其他异常使用默认处理器
+                loop.default_exception_handler(context)
+
+            loop.set_exception_handler(custom_exception_handler)
+            logger.debug("已设置 asyncio 异常处理器，将忽略 ConnectionResetError")
+        except RuntimeError:
+            pass
+
+
 async def websocket_heartbeat_checker():
     """WebSocket 心跳检测后台任务"""
     while True:
@@ -45,23 +110,41 @@ async def websocket_heartbeat_checker():
             await asyncio.sleep(5)
 
 
-# ServiceManager 全局实例
-_service_manager = None
+async def load_engines_background(db=None):
+    """后台加载引擎（不阻塞 API 启动）"""
+    try:
+        logger.info("开始后台加载引擎...")
+        from api.services.workflow_service import get_workflow_service, init_workflow_service
+
+        # 检查服务是否已初始化
+        service = get_workflow_service()
+        if service is None:
+            # 初始化工作流服务（会加载引擎）
+            await init_workflow_service(
+                output_dir="output",
+                max_concurrent_tasks=3,
+                database=db
+            )
+            logger.info("引擎后台加载完成")
+        else:
+            logger.info("工作流服务已存在，跳过引擎加载")
+    except Exception as e:
+        logger.error(f"后台加载引擎失败: {e}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理
-    
+
     启动顺序优化：
     1. 创建必要目录
-    2. 初始化数据库和工作流服务（确保 API 立即可用）
-    3. 初始化 ServiceManager
-    4. 启动 WebSocket 心跳检测
-    5. 后台启动 IndexTTS 和 HeyGem 服务（不阻塞 API 就绪）
+    2. 初始化数据库（确保 API 立即可用）
+    3. 启动 WebSocket 心跳检测
+    4. 后台异步加载引擎（不阻塞 API 启动）
     """
-    global _service_manager
-    
+    # 设置 asyncio 异常处理器（处理 Windows 平台的 ConnectionResetError）
+    setup_asyncio_exception_handler()
+
     # 启动时执行
     logger.info("=" * 50)
     logger.info("AUTOavantar API 服务启动中...")
@@ -80,94 +163,37 @@ async def lifespan(app: FastAPI):
         logger.error(f"数据库初始化失败: {e}")
         db = None
 
-    # 3. 初始化工作流服务（优先初始化，确保 API 立即可用）
-    try:
-        workflow_service = await init_workflow_service(
-            output_dir="output",
-            max_concurrent_tasks=3,
-            database=db
-        )
-        logger.info("工作流服务初始化完成")
-
-        # 恢复未完成的任务（断点续传）
-        if db:
-            recovered = await workflow_service.recover_incomplete_tasks()
-            if recovered:
-                logger.info(f"已恢复 {len(recovered)} 个未完成任务")
-    except Exception as e:
-        logger.error(f"工作流服务初始化失败: {e}")
-
-    # 4. 初始化 ServiceManager（但不启动服务）
-    try:
-        from core.service_manager import create_service_manager, destroy_service_manager
-        from core.system_config import get_config_manager
-        
-        _service_manager = create_service_manager()
-        logger.info("ServiceManager 初始化完成")
-        
-    except Exception as e:
-        logger.error(f"ServiceManager 初始化失败: {e}")
-        _service_manager = None
-
-    # 5. 启动 WebSocket 心跳检测任务
+    # 3. 启动 WebSocket 心跳检测任务
     heartbeat_task = asyncio.create_task(websocket_heartbeat_checker())
     logger.info("WebSocket 心跳检测已启动")
+
+    # 4. 后台异步加载引擎（不阻塞 API 启动）
+    engine_load_task = asyncio.create_task(load_engines_background(db))
+    logger.info("引擎后台加载任务已启动")
 
     # API 已就绪，可以开始接收请求
     logger.info("=" * 50)
     logger.info("✅ AUTOavantar API 服务已就绪")
+    logger.info("   引擎正在后台加载中，首次任务可能需要等待...")
     logger.info("=" * 50)
-
-    # 6. 后台启动 IndexTTS 和 HeyGem 服务（不阻塞 API 就绪）
-    if _service_manager:
-        try:
-            from core.system_config import get_config_manager
-            config_manager = get_config_manager()
-            low_memory_mode = config_manager.get_low_memory_mode()
-            
-            if low_memory_mode:
-                logger.info("低显存模式已启用，启动时不启动 IndexTTS 和 HeyGem")
-            else:
-                async def start_services_background():
-                    await asyncio.sleep(1.0)  # 延迟 1 秒，确保 API 完全就绪
-                    try:
-                        logger.info("开始后台启动 IndexTTS 服务...")
-                        success = _service_manager.start_service("indextts")
-                        if success:
-                            logger.info("✅ IndexTTS 服务启动成功")
-                        else:
-                            logger.error("❌ IndexTTS 服务启动失败")
-                    except Exception as e:
-                        logger.error(f"❌ IndexTTS 服务启动异常: {e}")
-                    
-                    try:
-                        logger.info("开始后台启动 HeyGem 服务...")
-                        success = _service_manager.start_service("heygem")
-                        if success:
-                            logger.info("✅ HeyGem 服务启动成功")
-                        else:
-                            logger.error("❌ HeyGem 服务启动失败")
-                    except Exception as e:
-                        logger.error(f"❌ HeyGem 服务启动异常: {e}")
-                
-                asyncio.create_task(start_services_background())
-                logger.info("📋 服务启动任务已提交（后台执行，不阻塞 API）")
-                
-        except Exception as e:
-            logger.error(f"服务启动配置检查失败: {e}")
 
     yield
 
     # 关闭时执行
     logger.info("AUTOavantar API 服务关闭中...")
 
-    # 取消 WebSocket 心跳检测任务
+    # 取消后台任务
     heartbeat_task.cancel()
+    engine_load_task.cancel()
     try:
         await heartbeat_task
     except asyncio.CancelledError:
         pass
-    logger.info("WebSocket 心跳检测已停止")
+    try:
+        await engine_load_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("后台任务已停止")
 
     # 关闭工作流服务
     try:
@@ -183,14 +209,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"数据库关闭失败: {e}")
 
-    # 关闭 ServiceManager
-    try:
-        from core.service_manager import destroy_service_manager
-        destroy_service_manager()
-        logger.info("ServiceManager 已关闭")
-    except Exception as e:
-        logger.error(f"ServiceManager 关闭失败: {e}")
-
 
 # 创建 FastAPI 应用
 app = FastAPI(
@@ -201,6 +219,18 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+
+# 添加验证错误处理器，打印详细错误信息
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    """捕获验证错误并打印详细信息"""
+    logger.error(f"请求验证失败: {exc.errors()}")
+    logger.error(f"请求体: {exc.body}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()}
+    )
 
 # 配置 CORS
 app.add_middleware(
@@ -268,16 +298,13 @@ if os.path.exists("uploads"):
         )
 
 # 注册路由 - 调整顺序，将具体路由放在通配符路由之前
-from api.routers import tasks, materials, upload, health, websocket, settings, functions, tags, services, system, license
+from api.routers import tasks, materials, upload, health, websocket, settings, functions, tags, system, license
 
 # 1. 健康检查（最具体的路由）
 app.include_router(health.router, prefix="/api", tags=["健康检查"])
 
 # 1.1 系统配置路由
 app.include_router(system.router, prefix="/api/system", tags=["系统配置"])
-
-# 1.5 服务管理路由
-app.include_router(services.router, prefix="/api", tags=["服务管理"])
 
 # 2. 功能接口（具体路由）
 app.include_router(functions.router, prefix="/api", tags=["功能接口"])
@@ -304,9 +331,73 @@ app.include_router(tasks.router, prefix="/api/tasks", tags=["任务管理"])
 app.include_router(license.router, prefix="/api/license", tags=["授权管理"])
 
 
+# 挂载前端静态文件
+def mount_frontend():
+    """挂载前端静态文件"""
+    # 查找前端 dist 目录
+    current_dir = Path.cwd()
+    possible_frontend_paths = [
+        current_dir / "frontend" / "dist",
+        current_dir.parent / "frontend" / "dist",
+        current_dir / ".." / "frontend" / "dist",
+    ]
+
+    frontend_dist = None
+    for path in possible_frontend_paths:
+        if path.exists() and (path / "index.html").exists():
+            frontend_dist = path
+            break
+
+    if frontend_dist:
+        logger.info(f"挂载前端静态文件: {frontend_dist}")
+
+        # 挂载静态资源目录（JS、CSS 等）
+        app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="assets")
+
+        # 处理所有非 API 路由，返回 index.html（SPA 路由支持）
+        @app.get("/{full_path:path}")
+        async def serve_spa(full_path: str):
+            """SPA 路由支持 - 所有非 API 路由返回 index.html"""
+            from starlette.responses import FileResponse
+
+            # 检查是否是 API 路由
+            if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("openapi.json"):
+                from fastapi import HTTPException
+                raise HTTPException(status_code=404, detail="Not found")
+
+            # 检查是否是静态文件请求
+            file_path = frontend_dist / full_path
+            if file_path.exists() and file_path.is_file():
+                return FileResponse(path=file_path)
+
+            # 否则返回 index.html（SPA 路由）
+            return FileResponse(path=frontend_dist / "index.html")
+
+        return True
+
+    logger.warning("未找到前端 dist 目录，前端服务未挂载")
+    return False
+
+
+frontend_mounted = mount_frontend()
+
+
 @app.get("/")
 async def root():
     """根路径"""
+    if frontend_mounted:
+        # 如果前端已挂载，返回 index.html
+        from starlette.responses import FileResponse
+        current_dir = Path.cwd()
+        possible_frontend_paths = [
+            current_dir / "frontend" / "dist",
+            current_dir.parent / "frontend" / "dist",
+            current_dir / ".." / "frontend" / "dist",
+        ]
+        for path in possible_frontend_paths:
+            if path.exists() and (path / "index.html").exists():
+                return FileResponse(path=path / "index.html")
+
     return {
         "name": "AUTOavantar API",
         "version": "1.0.0",

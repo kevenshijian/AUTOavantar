@@ -87,7 +87,7 @@ class GPUResourceManager:
                 del self._engines[engine_type]
                 logger.info(f"引擎已注销: {engine_type.value}")
 
-    def acquire(self, engine_type: EngineType) -> bool:
+    def acquire(self, engine_type: EngineType, timeout: float = 30.0) -> bool:
         """
         获取 GPU 使用权
 
@@ -95,6 +95,7 @@ class GPUResourceManager:
 
         Args:
             engine_type: 请求使用 GPU 的引擎类型
+            timeout: 释放操作的超时时间（秒），默认 30 秒
 
         Returns:
             是否成功获取使用权
@@ -105,9 +106,11 @@ class GPUResourceManager:
                 return True
 
             if self._current_holder is not None:
-                # 其他引擎占用，需要先释放
+                # 其他引擎占用，需要先释放（带超时保护）
                 logger.info(f"释放 {self._current_holder.value} 引擎以切换到 {engine_type.value}")
-                self._release_internal(self._current_holder)
+                released = self._release_internal_with_timeout(self._current_holder, timeout)
+                if not released:
+                    logger.warning(f"释放 {self._current_holder.value} 引擎超时，强制继续")
 
             self._current_holder = engine_type
             logger.info(f"{engine_type.value} 引擎已获取 GPU 使用权")
@@ -138,6 +141,45 @@ class GPUResourceManager:
 
         # 清理 CUDA 缓存
         self._empty_cuda_cache()
+
+    def _release_internal_with_timeout(self, engine_type: EngineType, timeout: float) -> bool:
+        """
+        带超时保护的内部释放方法
+
+        Args:
+            engine_type: 引擎类型
+            timeout: 超时时间（秒）
+
+        Returns:
+            是否在超时前完成释放
+        """
+        result = {'completed': False, 'error': None}
+
+        def _do_release():
+            try:
+                engine = self._engines.get(engine_type)
+                if engine is not None and hasattr(engine, 'unload'):
+                    engine.unload()
+                    logger.info(f"{engine_type.value} 引擎 unload 完成")
+                result['completed'] = True
+            except Exception as e:
+                result['error'] = str(e)
+                logger.error(f"{engine_type.value} 引擎 unload 失败: {e}")
+
+        # 在独立线程中执行释放
+        release_thread = threading.Thread(target=_do_release, daemon=True)
+        release_thread.start()
+        release_thread.join(timeout=timeout)
+
+        # 无论是否超时，都清理 CUDA 缓存
+        self._empty_cuda_cache()
+
+        if release_thread.is_alive():
+            # 线程仍在运行，表示超时
+            logger.warning(f"{engine_type.value} 引擎 unload 超时（{timeout}秒），已强制继续")
+            return False
+
+        return result['completed']
 
     def force_release_all(self) -> Dict[str, Any]:
         """

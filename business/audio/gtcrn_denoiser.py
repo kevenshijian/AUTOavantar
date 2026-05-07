@@ -72,8 +72,8 @@ class GTCDenoiser:
                 # 尝试其他可能的路径
                 alt_paths = [
                     "tools/stream/onnx_models/gtcrn.onnx",
-                    "index-tts-2/tools/stream/onnx_models/gtcrn_simple.onnx",
-                    "index-tts-2/tools/stream/onnx_models/gtcrn.onnx",
+                    "voicel/tools/stream/onnx_models/gtcrn_simple.onnx",
+                    "voicel/tools/stream/onnx_models/gtcrn.onnx",
                     os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools", "stream", "onnx_models", "gtcrn_simple.onnx"),
                     os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools", "stream", "onnx_models", "gtcrn.onnx")
                 ]

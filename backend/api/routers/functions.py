@@ -378,11 +378,53 @@ async def denoise_audio(request: DenoiseRequest):
     """
     audio_path = request.audio_path
 
-    # 拼接完整路径
-    full_audio_path = os.path.join(settings.UPLOAD_DIR, audio_path)
+    # 使用路径管理器查找音频文件
+    from core.paths import get_path_manager
+    path_manager = get_path_manager()
 
-    if not os.path.exists(full_audio_path):
-        raise HTTPException(status_code=400, detail=f"音频文件不存在: {full_audio_path}")
+    # 尝试多种路径查找音频文件
+    backend_root = Path(__file__).resolve().parent.parent.parent
+    project_root = path_manager.project_root
+
+    # 标准化路径：替换反斜杠为正斜杠
+    audio_path_normalized = audio_path.replace('\\', '/')
+
+    possible_paths = [
+        # 绝对路径
+        Path(audio_path) if os.path.isabs(audio_path) else None,
+        # 相对于项目根目录（audio_merger 返回的格式）
+        Path(project_root) / audio_path_normalized,
+        # 相对于后端目录
+        backend_root / audio_path_normalized,
+        # uploads 目录下的路径
+        backend_root / settings.UPLOAD_DIR / audio_path_normalized,
+        backend_root / "uploads" / audio_path_normalized,
+        # 直接路径
+        Path(audio_path_normalized),
+        # 去掉 backend/ 前缀的路径
+        backend_root / audio_path_normalized.replace('backend/', ''),
+    ]
+
+    # 过滤掉 None 值
+    possible_paths = [p for p in possible_paths if p is not None]
+
+    full_audio_path = None
+    for path in possible_paths:
+        if path.exists():
+            full_audio_path = str(path.resolve())
+            logger.info(f"找到音频文件: {full_audio_path}")
+            break
+
+    if not full_audio_path:
+        # 使用路径管理器的查找功能作为后备
+        found = path_manager.find_audio_file(audio_path)
+        if found:
+            full_audio_path = found
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"音频文件不存在: {audio_path}，已搜索路径: {[str(p) for p in possible_paths]}"
+            )
 
     try:
         denoiser = get_denoiser()
@@ -715,9 +757,46 @@ async def extract_frame(request: ExtractFrameRequest):
                 "frame_base64": f"data:image/jpeg;base64,{frame_base64}"
             }
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"提取首帧失败: {e}")
         raise HTTPException(status_code=500, detail=f"提取首帧失败: {str(e)}")
+
+
+@router.post("/open-output-dir")
+async def open_output_dir():
+    """
+    打开输出目录接口
+
+    使用系统默认文件管理器打开 AUTOavantar/output 目录
+    """
+    import platform
+
+    # 获取输出目录路径
+    output_dir = Path(__file__).resolve().parent.parent.parent.parent / "output"
+
+    if not output_dir.exists():
+        output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"创建输出目录: {output_dir}")
+
+    output_dir_absolute = str(output_dir.absolute())
+
+    try:
+        if platform.system() == "Windows":
+            subprocess.run(["explorer", output_dir_absolute], check=False)
+        elif platform.system() == "Darwin":  # macOS
+            subprocess.run(["open", output_dir_absolute], check=False)
+        else:  # Linux
+            subprocess.run(["xdg-open", output_dir_absolute], check=False)
+
+        logger.info(f"打开输出目录: {output_dir_absolute}")
+        return {
+            "code": 200,
+            "message": "输出目录已打开",
+            "data": {"path": output_dir_absolute}
+        }
+    except Exception as e:
+        logger.error(f"打开输出目录失败: {e}")
+        raise HTTPException(status_code=500, detail=f"打开输出目录失败: {str(e)}")

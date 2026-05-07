@@ -27,43 +27,47 @@ from api.services.database import get_database_service, DatabaseService
 
 logger = logging.getLogger("workflow_service")
 
+# 统一使用 backend/config 作为配置目录
+# __file__ 位于 backend/api/services/workflow_service.py
+# parent = services/, parent.parent = api/, parent.parent.parent = backend/
 CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
 
 
 def load_api_keys_config() -> Dict[str, Any]:
     """
-    从 api_keys.yaml 加载 API 密钥和端口配置
-    
+    从 api_keys.yaml 加载 API 密钥配置
+
     Returns:
-        包含 API 密钥和端口配置的字典
+        包含 API 密钥配置的字典
     """
     config_path = CONFIG_DIR / "api_keys.yaml"
     default_config = {
         "deepseek_api_key": "",
-        "aliyun_api_key": "",
-        "index_tts_port": 7860,
-        "heygem_port": 9889
+        "aliyun_api_key": ""
     }
-    
+
     if not config_path.exists():
         logger.warning(f"配置文件不存在: {config_path}，使用默认值")
         return default_config
-    
+
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f) or {}
-        
+
         result = default_config.copy()
+        # 兼容两种字段名格式
+        # 新格式: deepseek_api_key, aliyun_api_key
+        # 旧格式: deepseek, aliyun
+        deepseek_key = config.get("deepseek_api_key", "") or config.get("deepseek", "")
+        aliyun_key = config.get("aliyun_api_key", "") or config.get("aliyun", "")
         result.update({
-            "deepseek_api_key": config.get("deepseek_api_key", ""),
-            "aliyun_api_key": config.get("aliyun_api_key", ""),
-            "index_tts_port": config.get("index_tts_port", 7860),
-            "heygem_port": config.get("heygem_port", 9889)
+            "deepseek_api_key": deepseek_key,
+            "aliyun_api_key": aliyun_key
         })
-        
-        logger.info(f"已加载 API 密钥配置: TTS端口={result['index_tts_port']}, HeyGEM端口={result['heygem_port']}")
+
+        logger.info("已加载 API 密钥配置")
         return result
-        
+
     except Exception as e:
         logger.error(f"加载 API 密钥配置失败: {e}")
         return default_config
@@ -163,6 +167,9 @@ class AsyncTask:
     # 标签组 ID
     scene_tag_group_id: Optional[int] = None
 
+    # 插队标记
+    is_priority: bool = False
+
 
 @dataclass
 class TaskCallback:
@@ -178,32 +185,35 @@ class WorkflowService:
 
     def __init__(
         self,
-        tts_host: str = "http://localhost:7860",
-        heygem_host: str = "http://localhost:9889",
+        tts_engine=None,
+        heygem_engine=None,
         llm_provider: str = "deepseek",
         llm_api_key: str = "",
         aliyun_api_key: str = "",
         output_dir: str = "output",
-        max_concurrent_tasks: int = 3
+        max_concurrent_tasks: int = 3,
+        low_memory_mode: bool = False
     ):
         """
         初始化工作流服务
 
         Args:
-            tts_host: TTS 服务地址
-            heygem_host: HeyGem 服务地址
+            tts_engine: TTSEngine 实例
+            heygem_engine: HeyGemEngine 实例
             llm_provider: LLM 提供商
             llm_api_key: LLM API 密钥
             aliyun_api_key: 阿里云 API 密钥（用于封面生成）
             output_dir: 输出目录
             max_concurrent_tasks: 最大并发任务数
+            low_memory_mode: 是否启用低显存模式（任务完成后卸载模型）
         """
-        self.tts_host = tts_host
-        self.heygem_host = heygem_host
+        self.tts_engine = tts_engine
+        self.heygem_engine = heygem_engine
         self.llm_provider = llm_provider
         self.llm_api_key = llm_api_key
         self.aliyun_api_key = aliyun_api_key
         self.output_dir = output_dir
+        self.low_memory_mode = low_memory_mode
 
         self._tasks: Dict[str, AsyncTask] = {}
         self._callbacks: Dict[str, TaskCallback] = {}
@@ -214,12 +224,12 @@ class WorkflowService:
         self._lock = asyncio.Lock()
         self._tasks_loaded_from_db = False
         self._main_loop: Optional[asyncio.AbstractEventLoop] = None
-        
+
         self._scheduler = SimpleTaskScheduler()
         self._scheduler.set_executor(self._execute_task_callback)
         self._scheduler.start()
 
-        logger.info("工作流服务初始化完成，单任务顺序执行模式")
+        logger.info(f"工作流服务初始化完成（引擎模式），低显存模式: {low_memory_mode}")
 
     def set_main_loop(self, loop: asyncio.AbstractEventLoop):
         """设置主事件循环"""
@@ -232,15 +242,48 @@ class WorkflowService:
         self._db_initialized = True
         logger.info("数据库已绑定到工作流服务")
 
+    def _ensure_engines_loaded(self):
+        """
+        确保引擎已加载（低显存模式下按需加载）
+
+        CR-026: Service 层不再预加载引擎
+        引擎的按阶段加载由 Workflow 在各阶段自行管理：
+        - 音频合成阶段：加载 TTSEngine
+        - 视频合成阶段：加载 HeyGemEngine
+
+        AC-226: 低显存模式按阶段加载模型
+        """
+        # Service 层不再预加载引擎
+        # 实际的按需加载由 Workflow 在各阶段自行处理
+        logger.debug("引擎加载由 Workflow 按阶段自行管理")
+
+    def _release_engines_after_task(self):
+        """
+        任务完成后释放引擎（低显存模式下）
+
+        CR-026: Service 层不再统一卸载引擎
+        引擎的按阶段卸载由 Workflow 在各阶段完成后自行管理：
+        - 音频合成完成后：卸载 TTSEngine
+        - 视频合成完成后：卸载 HeyGemEngine
+
+        AC-227: 低显存模式阶段完成后卸载模型
+        AC-228: 低显存模式任务完成后卸载所有模型
+        AC-229: 低显存模式关闭时模型常驻
+        """
+        # Service 层不再统一卸载引擎
+        # 实际的按需卸载由 Workflow 在各阶段完成后自行处理
+        logger.debug("引擎卸载由 Workflow 按阶段自行管理")
+
     def _create_workflow(self) -> DigitalHumanWorkflow:
         """创建工作流实例"""
         workflow = create_workflow(
-            tts_host=self.tts_host,
-            heygem_host=self.heygem_host,
+            tts_engine=self.tts_engine,
+            heygem_engine=self.heygem_engine,
             llm_provider=self.llm_provider,
             llm_api_key=self.llm_api_key,
             output_dir=self.output_dir,
-            qwen_api_key=self.aliyun_api_key
+            qwen_api_key=self.aliyun_api_key,
+            low_memory_mode=self.low_memory_mode
         )
         if self._db:
             workflow.set_database(self._db)
@@ -269,7 +312,7 @@ class WorkflowService:
     async def create_task(
         self,
         name: str,
-        source_video_path: str,
+        source_video_path: Optional[str] = None,
         script_text: str = "",
         topic: str = "",
         prompt_audio_path: str = "",
@@ -285,11 +328,14 @@ class WorkflowService:
         tts_emo_weight: float = 0.8,
         left_tts_speed: Optional[float] = None,
         right_tts_speed: Optional[float] = None,
+        left_tts_emo_weight: Optional[float] = None,
+        right_tts_emo_weight: Optional[float] = None,
         enable_subtitle: bool = True,
         enable_bgm: bool = True,
         bgm_volume: float = 0.3,
         enable_cover: bool = False,
         heygem_steps: int = 16,
+        heygem_batch_size: int = 8,
         opening_video: Optional[str] = None,
         loop_videos: Optional[List[str]] = None,
         scene_videos: Optional[List[str]] = None,
@@ -376,6 +422,8 @@ class WorkflowService:
             tts_emo_weight=tts_emo_weight,
             left_tts_speed=left_tts_speed,
             right_tts_speed=right_tts_speed,
+            left_tts_emo_weight=left_tts_emo_weight,
+            right_tts_emo_weight=right_tts_emo_weight,
             enable_denoise=enable_denoise,
             denoise_strength=denoise_strength,
             enable_subtitle=enable_subtitle,
@@ -393,8 +441,10 @@ class WorkflowService:
             subtitle_background_alpha=kwargs.get("subtitle_background_alpha", 0.0),
             subtitle_line_spacing=kwargs.get("subtitle_line_spacing", 0.5),
             enable_double_mode=enable_double_mode,
-            heygem_steps=heygem_steps
+            heygem_steps=heygem_steps,
+            inference_batch_size=heygem_steps  # 使用 heygem_steps 作为推理批次大小
         )
+        logger.info(f"TaskConfig 创建完成: inference_batch_size={config.inference_batch_size}, heygem_steps 参数值={heygem_steps}")
         task.config = config
 
         self._tasks[task_id] = task
@@ -512,6 +562,7 @@ class WorkflowService:
             "enable_cover": getattr(config, 'enable_cover', False) if config else False,
             "cover_prompt_template": getattr(config, 'cover_prompt_template', "根据文案{summary}生成视频封面，风格简洁，突出主题") if config else "根据文案{summary}生成视频封面，风格简洁，突出主题",
             "heygem_steps": getattr(config, 'heygem_steps', 16) if config else 16,
+            "inference_batch_size": getattr(config, 'inference_batch_size', 8) if config else 8,
             "opening_video": getattr(task, 'opening_video', None),
             "loop_videos": getattr(task, 'loop_videos', []),
             "scene_videos": getattr(task, 'scene_videos', []),
@@ -535,6 +586,9 @@ class WorkflowService:
         task.status = AsyncTaskStatus.RUNNING
         task.current_stage = "任务启动"
         task.updated_at = datetime.now()
+
+        # AC-219: 低显存模式开启时任务按需加载模型
+        self._ensure_engines_loaded()
 
         try:
             loop = asyncio.new_event_loop()
@@ -621,6 +675,7 @@ class WorkflowService:
                 left_tts_speed=config.get("left_tts_speed", getattr(task, 'left_tts_speed', None)),
                 right_tts_speed=config.get("right_tts_speed", getattr(task, 'right_tts_speed', None)),
                 heygem_steps=config.get("heygem_steps", getattr(task, 'heygem_steps', 16)),
+                inference_batch_size=config.get("inference_batch_size", getattr(task.config, 'inference_batch_size', 8) if task.config else 8),
                 enable_subtitle=config.get("enable_subtitle", getattr(task, 'enable_subtitle', True)),
                 subtitle_font=config.get("subtitle_font", getattr(task, 'subtitle_font', "SimHei")),
                 subtitle_size=config.get("subtitle_size", getattr(task, 'subtitle_size', 24)),
@@ -824,6 +879,9 @@ class WorkflowService:
         finally:
             task.completed_at = datetime.now()
             task.updated_at = datetime.now()
+
+            # AC-220: 低显存模式开启时任务完成后卸载模型
+            self._release_engines_after_task()
 
             if task_id in self._workflows:
                 del self._workflows[task_id]
@@ -1252,17 +1310,24 @@ class WorkflowService:
                         task.config = TaskConfig.from_dict(config_dict)
                     
                     self._tasks[task_id] = task
-                
+
                 self._tasks_loaded_from_db = True
                 logger.info(f"从数据库加载了 {len(tasks_from_db)} 个任务")
             except Exception as e:
                 logger.error(f"从数据库读取任务失败: {e}")
-        
+
         # 从内存中获取任务列表
         tasks = list(self._tasks.values())
 
         if status:
             tasks = [t for t in tasks if t.status == status]
+
+        # 从调度器获取 is_priority 信息
+        if self._scheduler:
+            for task in tasks:
+                scheduler_status = self._scheduler.get_task_status(task.task_id)
+                if scheduler_status:
+                    task.is_priority = scheduler_status.get('is_priority', False)
 
         tasks.sort(key=lambda x: x.created_at, reverse=True)
         return tasks
@@ -1319,22 +1384,22 @@ class WorkflowService:
         if task.cancel_event:
             task.cancel_event.set()
 
-        # 检查任务当前阶段，如果在视频生成阶段，停止 HeyGem 服务
+        # 检查任务当前阶段，如果在视频生成阶段，卸载 HeyGem 引擎释放显存
         current_stage = getattr(task, 'current_stage', '')
         if current_stage and ('视频生成' in current_stage or '视频合成' in current_stage or 'heygem' in current_stage.lower()):
-            logger.info(f"任务 {task_id} 在视频生成阶段被取消，准备停止 HeyGem 服务")
+            logger.info(f"任务 {task_id} 在视频生成阶段被取消，准备卸载 HeyGem 引擎")
             try:
-                from core.service_manager import get_service_manager
-                sm = get_service_manager()
-                if sm:
-                    # 异步停止 HeyGem 服务
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(None, sm.stop_service, "heygem")
-                    logger.info(f"任务 {task_id} 取消时 HeyGem 服务已停止")
+                from core.gpu_manager import get_gpu_resource_manager
+                gpu_manager = get_gpu_resource_manager()
+                if gpu_manager:
+                    heygem_engine = gpu_manager.get_engine("heygem_engine")
+                    if heygem_engine and heygem_engine.is_loaded:
+                        heygem_engine.unload()
+                        logger.info(f"任务 {task_id} 取消时 HeyGem 引擎已卸载")
                 else:
-                    logger.warning(f"任务 {task_id} 取消时无法获取 ServiceManager")
+                    logger.warning(f"任务 {task_id} 取消时无法获取 GPUResourceManager")
             except Exception as e:
-                logger.error(f"任务 {task_id} 取消时停止 HeyGem 服务失败: {e}")
+                logger.error(f"任务 {task_id} 取消时卸载 HeyGem 引擎失败: {e}")
 
         # 同步取消调度器中的任务状态
         try:
@@ -1410,7 +1475,7 @@ class WorkflowService:
 
     async def priority_task(self, task_id: str) -> bool:
         """
-        将任务优先级提升到最前
+        将任务设置为插队任务
 
         Args:
             task_id: 任务ID
@@ -1424,19 +1489,23 @@ class WorkflowService:
 
         task = self._tasks[task_id]
 
-        if task.status != AsyncTaskStatus.PENDING:
-            logger.warning(f"任务 {task_id} 不是等待状态，无法调整优先级")
+        # 同时接受 PENDING 和 QUEUED 状态的任务
+        if task.status not in [AsyncTaskStatus.PENDING, AsyncTaskStatus.QUEUED]:
+            logger.warning(f"任务 {task_id} 状态为 {task.status}，不是等待状态，无法调整优先级")
             return False
 
-        async with self._lock:
-            pending_tasks = [tid for tid, t in self._tasks.items() 
-                           if t.status == AsyncTaskStatus.PENDING]
-            if task_id in pending_tasks:
-                pending_tasks.remove(task_id)
-                pending_tasks.insert(0, task_id)
-
-        logger.info(f"任务 {task_id} 已置顶")
-        return True
+        # 调用调度器的 set_priority 方法
+        if self._scheduler:
+            success = self._scheduler.set_priority(task_id)
+            if success:
+                logger.info(f"任务 {task_id} 已设置为插队任务")
+                return True
+            else:
+                logger.error(f"调度器设置插队任务失败: {task_id}")
+                return False
+        else:
+            logger.warning("调度器未初始化")
+            return False
 
     async def delete_task(self, task_id: str) -> bool:
         """
@@ -1893,12 +1962,12 @@ class WorkflowService:
         temp_dirs = [
             str(project_root / "output" / "temp" / "audio"),
             str(project_root / "output" / "temp" / "video"),
-            str(project_root / "index-tts-2" / "outputs"),
-            str(project_root / "index-tts-2" / "tmp"),
-            str(project_root / "heygem-win-50-onnx" / "生成结果"),
-            str(project_root / "heygem-win-50-onnx" / "temp"),
-            str(project_root / "heygem-win-50-onnx" / "tmp"),
-            str(project_root / "heygem-win-50-onnx" / "change"),
+            str(project_root / "voicel" / "outputs"),
+            str(project_root / "voicel" / "tmp"),
+            str(project_root / "Portrait" / "生成结果"),
+            str(project_root / "Portrait" / "temp"),
+            str(project_root / "Portrait" / "tmp"),
+            str(project_root / "Portrait" / "change"),
             str(project_root / "backend" / "temp"),
             str(project_root / "backend" / "tmp"),
         ]
@@ -2050,50 +2119,39 @@ class WorkflowService:
 _global_service: Optional[WorkflowService] = None
 
 
-def get_workflow_service() -> WorkflowService:
+def get_workflow_service() -> Optional[WorkflowService]:
     """
     获取全局工作流服务实例
 
     Returns:
-        WorkflowService 实例
+        WorkflowService 实例，如果未初始化则返回 None
     """
     global _global_service
-
-    if _global_service is None:
-        from config.settings import settings
-
-        _global_service = WorkflowService(
-            tts_host=settings.TTS_HOST,
-            heygem_host=settings.HEYGEM_HOST,
-            llm_provider=settings.LLM_PROVIDER,
-            llm_api_key=settings.LLM_API_KEY,
-            output_dir=settings.OUTPUT_DIR,
-            max_concurrent_tasks=settings.MAX_CONCURRENT_TASKS
-        )
-
     return _global_service
 
 
 async def init_workflow_service(
-    tts_host: Optional[str] = None,
-    heygem_host: Optional[str] = None,
+    tts_engine=None,
+    heygem_engine=None,
     llm_provider: str = "deepseek",
     llm_api_key: Optional[str] = None,
     output_dir: str = "output",
     max_concurrent_tasks: int = 3,
-    database: Optional[DatabaseService] = None
+    database: Optional[DatabaseService] = None,
+    low_memory_mode: Optional[bool] = None
 ) -> WorkflowService:
     """
     初始化全局工作流服务
 
     Args:
-        tts_host: TTS 服务地址（如未指定，从配置文件读取）
-        heygem_host: HeyGem 服务地址（如未指定，从配置文件读取）
+        tts_engine: TTSEngine 实例（如未指定，从配置创建）
+        heygem_engine: HeyGemEngine 实例（如未指定，从配置创建）
         llm_provider: LLM 提供商
         llm_api_key: LLM API 密钥（如未指定，从配置文件读取）
         output_dir: 输出目录
         max_concurrent_tasks: 最大并发任务数
         database: 数据库服务实例
+        low_memory_mode: 是否启用低显存模式（如未指定，从系统配置读取）
 
     Returns:
         WorkflowService 实例
@@ -2101,31 +2159,41 @@ async def init_workflow_service(
     global _global_service
 
     api_config = load_api_keys_config()
-    
-    if tts_host is None:
-        tts_port = api_config.get("index_tts_port", 7860)
-        tts_host = f"http://localhost:{tts_port}"
-    
-    if heygem_host is None:
-        heygem_port = api_config.get("heygem_port", 9889)
-        heygem_host = f"http://localhost:{heygem_port}"
-    
+
     if llm_api_key is None:
         llm_api_key = api_config.get("deepseek_api_key", "")
-    
+
     aliyun_api_key = api_config.get("aliyun_api_key", "")
+
+    # 读取低显存模式配置
+    if low_memory_mode is None:
+        try:
+            from core.system_config import get_config_manager
+            config_manager = get_config_manager()
+            low_memory_mode = config_manager.get_low_memory_mode()
+        except Exception as e:
+            logger.warning(f"读取低显存模式配置失败，使用默认值: {e}")
+            low_memory_mode = False
+
+    # 如果未提供引擎，从配置创建
+    if tts_engine is None or heygem_engine is None:
+        from core.engines import create_engines_from_config
+        engines = create_engines_from_config(low_memory_mode=low_memory_mode)
+        tts_engine = tts_engine or engines.get("tts_engine")
+        heygem_engine = heygem_engine or engines.get("heygem_engine")
 
     if _global_service is not None:
         _global_service.shutdown()
 
     _global_service = WorkflowService(
-        tts_host=tts_host,
-        heygem_host=heygem_host,
+        tts_engine=tts_engine,
+        heygem_engine=heygem_engine,
         llm_provider=llm_provider,
         llm_api_key=llm_api_key,
         aliyun_api_key=aliyun_api_key,
         output_dir=output_dir,
-        max_concurrent_tasks=max_concurrent_tasks
+        max_concurrent_tasks=max_concurrent_tasks,
+        low_memory_mode=low_memory_mode
     )
 
     try:
@@ -2137,7 +2205,15 @@ async def init_workflow_service(
     if database:
         await _global_service.set_database(database)
 
-    logger.info(f"全局工作流服务已初始化: TTS={tts_host}, HeyGEM={heygem_host}")
+        # 恢复未完成的任务（断点续传）
+        try:
+            recovered = await _global_service.recover_incomplete_tasks()
+            if recovered:
+                logger.info(f"已恢复 {len(recovered)} 个未完成任务")
+        except Exception as e:
+            logger.error(f"恢复未完成任务失败: {e}")
+
+    logger.info(f"全局工作流服务已初始化（引擎模式），低显存模式: {low_memory_mode}")
     return _global_service
 
 

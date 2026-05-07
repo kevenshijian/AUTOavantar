@@ -84,13 +84,13 @@ Windows 用户可以直接运行：
 
 #### 1. 启动 HeyGem 服务
 ```bash
-cd heygem-win-50-onnx
+cd Portrait
 开始.bat
 ```
 
 #### 2. 启动 IndexTTS 服务
 ```bash
-cd index-tts-2
+cd voicel
 运行_自动启动接口服务.bat
 ```
 
@@ -134,8 +134,8 @@ AUTOavantar/
 │   │   ├── stores/         # 状态管理
 │   │   └── api/            # API 封装
 │   └── package.json
-├── heygem-win-50-onnx/    # HeyGem 数字人服务
-├── index-tts-2/           # IndexTTS 语音合成服务
+├── Portrait/    # HeyGem 数字人服务
+├── voicel/           # IndexTTS 语音合成服务
 ├── config/                 # 配置文件
 ├── main.py                 # 命令行入口
 └── 启动系统.bat            # 一键启动脚本

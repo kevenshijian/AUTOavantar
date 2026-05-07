@@ -7,7 +7,7 @@ API 数据模型模块
 from datetime import datetime
 from enum import Enum
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 # ============== 任务相关模型 ==============
@@ -40,8 +40,8 @@ class TaskStage(str, Enum):
 class VideoWithTag(BaseModel):
     """带标签的视频素材"""
     model_config = ConfigDict(from_attributes=True)
-    
-    file_path: str = Field(..., description="视频文件路径")
+
+    file_path: str = Field(default="", description="视频文件路径")
     emotion_tags: List[str] = Field(default_factory=list, description="情绪标签列表")
     scene_tags: List[str] = Field(default_factory=list, description="场景标签列表")
 
@@ -77,6 +77,7 @@ class TaskConfig(BaseModel):
     heygem_steps: int = Field(default=16, ge=4, le=32, description="推理步数")
     heygem_ifface: bool = Field(default=True, description="是否使用原始分辨率")
     heygem_if_gfpgan: bool = Field(default=False, description="是否使用 GFPGAN")
+    heygem_batch_size: int = Field(default=4, ge=1, le=16, description="推理批次大小")
     
     # 音频处理配置
     enable_denoise: bool = Field(default=True, description="是否启用降噪")
@@ -95,7 +96,7 @@ class TaskConfig(BaseModel):
     
     # 字幕样式配置
     subtitle_font: str = Field(default="SimHei", description="字幕字体")
-    subtitle_size: int = Field(default=24, ge=12, le=72, description="字幕字号")
+    subtitle_size: int = Field(default=24, ge=10, le=72, description="字幕字号")
     subtitle_color: str = Field(default="white", description="字幕颜色")
     subtitle_stroke_color: str = Field(default="#000000", description="字幕描边颜色")
     subtitle_stroke_width: float = Field(default=1.0, ge=0.0, le=10.0, description="字幕描边宽度")
@@ -121,8 +122,8 @@ class TaskBase(BaseModel):
 class TaskResponse(TaskBase):
     """任务响应模型"""
     model_config = ConfigDict(from_attributes=True)
-    
-    source_video_path: str = Field(..., description="源视频路径")
+
+    source_video_path: Optional[str] = Field(None, description="源视频路径")
     script_text: Optional[str] = Field(None, description="原始文案")
     prompt_audio_path: Optional[str] = Field(None, description="音色参考音频路径")
     bgm_path: Optional[str] = Field(None, description="BGM 路径")
@@ -133,12 +134,13 @@ class TaskResponse(TaskBase):
     created_at: datetime = Field(..., description="创建时间")
     updated_at: Optional[datetime] = Field(None, description="更新时间")
     completed_at: Optional[datetime] = Field(None, description="完成时间")
+    is_priority: bool = Field(default=False, description="是否为插队任务")
 
 
 class TaskCreateRequest(BaseModel):
     """创建任务请求"""
     name: str = Field(..., min_length=1, max_length=200, description="任务名称")
-    source_video_path: str = Field(..., description="源视频路径")
+    source_video_path: Optional[str] = Field(None, description="源视频路径（可选）")
     script_text: Optional[str] = Field(None, description="文案文本")
     topic: Optional[str] = Field(None, description="主题（用于 LLM 生成文案）")
     prompt_audio_path: Optional[str] = Field(None, description="音色参考音频路径（单人模式）")
@@ -155,6 +157,8 @@ class TaskCreateRequest(BaseModel):
     tts_emo_weight: float = Field(default=0.8, ge=0.1, le=1.2, description="情感权重")
     left_tts_speed: Optional[float] = Field(None, ge=0.8, le=1.2, description="左说话人语速 (0.8-1.2)")
     right_tts_speed: Optional[float] = Field(None, ge=0.8, le=1.2, description="右说话人语速 (0.8-1.2)")
+    left_tts_emo_weight: Optional[float] = Field(None, ge=0.1, le=1.2, description="左说话人情感权重")
+    right_tts_emo_weight: Optional[float] = Field(None, ge=0.1, le=1.2, description="右说话人情感权重")
     enable_subtitle: bool = Field(default=True, description="是否添加字幕")
     enable_bgm: bool = Field(default=True, description="是否添加 BGM")
     bgm_volume: float = Field(default=0.3, ge=0.0, le=1.0, description="BGM 音量")
@@ -162,7 +166,7 @@ class TaskCreateRequest(BaseModel):
     
     # 字幕样式配置
     subtitle_font: str = Field(default="SimHei", description="字幕字体")
-    subtitle_size: int = Field(default=24, ge=12, le=72, description="字幕字号")
+    subtitle_size: int = Field(default=24, ge=10, le=72, description="字幕字号")
     subtitle_color: str = Field(default="white", description="字幕颜色")
     subtitle_stroke_color: str = Field(default="#000000", description="字幕描边颜色")
     subtitle_stroke_width: float = Field(default=1.0, ge=0.0, le=10.0, description="字幕描边宽度")
@@ -172,7 +176,8 @@ class TaskCreateRequest(BaseModel):
     
     # HeyGem 配置
     heygem_steps: int = Field(default=16, ge=4, le=32, description="推理步数")
-    
+    heygem_batch_size: int = Field(default=4, ge=1, le=16, description="推理批次大小")
+
     # 兼容旧接口的视频素材（简单路径格式）
     opening_video: Optional[str] = Field(None, description="开场视频路径（兼容）")
     loop_videos: List[str] = Field(default_factory=list, description="循环视频列表（兼容）")
@@ -184,9 +189,71 @@ class TaskCreateRequest(BaseModel):
     loop_videos_with_tags: List[VideoWithTag] = Field(default_factory=list, description="循环视频列表（带标签）")
     scene_videos_with_tags: List[VideoWithTag] = Field(default_factory=list, description="场景视频列表（带标签）")
     ending_video_with_tags: Optional[VideoWithTag] = Field(None, description="结束视频（带标签）")
-    
+
     # 标签组 ID
     scene_tag_group_id: Optional[int] = Field(None, description="场景标签组 ID")
+
+    @model_validator(mode='after')
+    def validate_paths(self):
+        """验证所有文件路径的安全性"""
+        from core.paths import validate_path_in_allowed_dirs
+
+        # 所有路径都是可选的，只检查安全性，不强制检查文件存在
+        # 文件存在性检查在后续业务逻辑中处理
+        optional_paths = [
+            ('source_video_path', self.source_video_path, False),
+            ('prompt_audio_path', self.prompt_audio_path, False),
+            ('left_prompt_audio_path', self.left_prompt_audio_path, False),
+            ('right_prompt_audio_path', self.right_prompt_audio_path, False),
+            ('bgm_path', self.bgm_path, False),
+            ('opening_video', self.opening_video, False),
+            ('ending_video', self.ending_video, False),
+        ]
+
+        # 验证可选路径
+        for field_name, path, check_exists in optional_paths:
+            if path:
+                valid, result = validate_path_in_allowed_dirs(path, check_exists=check_exists)
+                if not valid:
+                    raise ValueError(f"{field_name}: {result}")
+
+        # 验证列表路径
+        for path in self.loop_videos:
+            if path:
+                valid, result = validate_path_in_allowed_dirs(path, check_exists=False)
+                if not valid:
+                    raise ValueError(f"loop_videos: {result}")
+
+        for path in self.scene_videos:
+            if path:
+                valid, result = validate_path_in_allowed_dirs(path, check_exists=False)
+                if not valid:
+                    raise ValueError(f"scene_videos: {result}")
+
+        # 验证带标签的视频路径
+        for video in self.loop_videos_with_tags:
+            if video.file_path:
+                valid, result = validate_path_in_allowed_dirs(video.file_path, check_exists=False)
+                if not valid:
+                    raise ValueError(f"loop_videos_with_tags: {result}")
+
+        for video in self.scene_videos_with_tags:
+            if video.file_path:
+                valid, result = validate_path_in_allowed_dirs(video.file_path, check_exists=False)
+                if not valid:
+                    raise ValueError(f"scene_videos_with_tags: {result}")
+
+        if self.opening_video_with_tags and self.opening_video_with_tags.file_path:
+            valid, result = validate_path_in_allowed_dirs(self.opening_video_with_tags.file_path, check_exists=False)
+            if not valid:
+                raise ValueError(f"opening_video_with_tags: {result}")
+
+        if self.ending_video_with_tags and self.ending_video_with_tags.file_path:
+            valid, result = validate_path_in_allowed_dirs(self.ending_video_with_tags.file_path, check_exists=False)
+            if not valid:
+                raise ValueError(f"ending_video_with_tags: {result}")
+
+        return self
 
 
 class TaskUpdateRequest(BaseModel):

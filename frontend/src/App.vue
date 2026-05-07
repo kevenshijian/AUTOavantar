@@ -1,6 +1,34 @@
 <template>
   <div id="app" :class="{ 'dark-theme': isDarkTheme }">
-    <el-container class="layout-container">
+    <!-- 启动等待页面 -->
+    <div v-if="!isBackendReady" class="loading-screen" :class="{ 'dark-theme': isDarkTheme }">
+      <div class="loading-content">
+        <div class="loading-logo">
+          <svg class="logo-icon" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="40" height="40" rx="8" fill="url(#logoGrad)"/>
+            <path d="M12 14L20 10L28 14V26L20 30L12 26V14Z" stroke="white" stroke-width="2" fill="none"/>
+            <circle cx="20" cy="20" r="4" fill="white"/>
+            <defs>
+              <linearGradient id="logoGrad" x1="0" y1="0" x2="40" y2="40">
+                <stop stop-color="#00d9ff"/>
+                <stop offset="1" stop-color="#00ff88"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <h1 class="loading-title">AUTO<span class="highlight">Avantar</span></h1>
+        <div class="loading-spinner">
+          <el-icon class="is-loading" :size="32">
+            <Loading />
+          </el-icon>
+        </div>
+        <p class="loading-text">{{ loadingMessage }}</p>
+        <p class="loading-hint" v-if="loadingHint">{{ loadingHint }}</p>
+      </div>
+    </div>
+
+    <!-- 主应用界面 -->
+    <el-container v-else class="layout-container">
       <!-- 主内容区 -->
       <el-container class="main-container">
         <!-- 顶部导航 -->
@@ -112,10 +140,59 @@ import { useTaskStore } from '@/stores/taskStore'
 import { wsManager } from '@/utils/websocket'
 import websocketService from '@/services/websocket'
 import { ElMessage } from 'element-plus'
-import { Collection, Setting, HomeFilled, Bell, Sunny, Moon } from '@element-plus/icons-vue'
+import { Collection, Setting, HomeFilled, Bell, Sunny, Moon, Loading } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const taskStore = useTaskStore()
+
+// 后端就绪状态
+const isBackendReady = ref(false)
+const loadingMessage = ref('系统启动中...')
+const loadingHint = ref('')
+
+// 检查后端是否就绪
+const checkBackendReady = async () => {
+  try {
+    const response = await fetch('/api/health')
+    if (response.ok) {
+      isBackendReady.value = true
+      loadingMessage.value = '系统就绪'
+      return true
+    }
+  } catch (error) {
+    // 后端未就绪
+  }
+  return false
+}
+
+// 等待后端就绪
+const waitForBackend = async () => {
+  const maxAttempts = 120 // 最多等待 2 分钟
+  let attempts = 0
+
+  while (!isBackendReady.value && attempts < maxAttempts) {
+    attempts++
+    loadingMessage.value = `系统启动中... (${attempts}s)`
+
+    if (attempts > 10) {
+      loadingHint.value = '引擎正在加载中，请耐心等待'
+    }
+    if (attempts > 30) {
+      loadingHint.value = '首次启动可能需要较长时间，请继续等待'
+    }
+
+    await checkBackendReady()
+
+    if (!isBackendReady.value) {
+      await new Promise(resolve => setTimeout(resolve, 1000))
+    }
+  }
+
+  if (!isBackendReady.value) {
+    loadingMessage.value = '启动超时，请刷新页面重试'
+    loadingHint.value = '如果问题持续，请检查后端日志'
+  }
+}
 
 const pendingTasks = computed(() => taskStore.pendingCount)
 
@@ -213,6 +290,13 @@ const connectToRunningTasks = async () => {
 }
 
 onMounted(async () => {
+  // 先等待后端就绪
+  await waitForBackend()
+
+  if (!isBackendReady.value) {
+    return // 启动超时，不继续初始化
+  }
+
   prefersDarkScheme.addEventListener('change', (e) => {
     if (!localStorage.getItem('theme')) {
       isDarkTheme.value = e.matches
@@ -245,6 +329,95 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* 启动等待页面样式 */
+.loading-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e7ed 100%);
+  z-index: 9999;
+}
+
+.dark-theme.loading-screen {
+  background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+}
+
+.loading-content {
+  text-align: center;
+}
+
+.loading-logo {
+  margin-bottom: 24px;
+}
+
+.loading-logo .logo-icon {
+  width: 80px;
+  height: 80px;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.8;
+  }
+}
+
+.loading-title {
+  font-size: 32px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 32px;
+}
+
+.dark-theme .loading-title {
+  color: #e6edf3;
+}
+
+.loading-title .highlight {
+  background: linear-gradient(135deg, #00d9ff 0%, #00ff88 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.loading-spinner {
+  margin-bottom: 24px;
+  color: #409EFF;
+}
+
+.dark-theme .loading-spinner {
+  color: #00d9ff;
+}
+
+.loading-text {
+  font-size: 16px;
+  color: #606266;
+  margin-bottom: 8px;
+}
+
+.dark-theme .loading-text {
+  color: #8b949e;
+}
+
+.loading-hint {
+  font-size: 14px;
+  color: #909399;
+}
+
+.dark-theme .loading-hint {
+  color: #6e7681;
+}
+
 .layout-container {
   min-height: 100vh;
 }

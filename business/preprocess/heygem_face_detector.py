@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 # 添加 HeyGem 路径到 sys.path
 # 当前文件: business/preprocess/heygem_face_detector.py
 # 项目根目录: D:/AI/AUTOavantar
-# HeyGem 目录: D:/AI/AUTOavantar/heygem-win-50-onnx
+# HeyGem 目录: D:/AI/AUTOavantar/Portrait
 _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_CURRENT_DIR)  # business
 _PROJECT_ROOT = os.path.dirname(_PROJECT_ROOT)  # AUTOavantar (项目根)
-HEYGEM_PATH = os.path.join(_PROJECT_ROOT, "heygem-win-50-onnx")
+HEYGEM_PATH = os.path.join(_PROJECT_ROOT, "Portrait")
 
 if HEYGEM_PATH not in sys.path:
     sys.path.insert(0, HEYGEM_PATH)
