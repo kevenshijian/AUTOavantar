@@ -2023,6 +2023,42 @@ class WorkflowService:
         
         return deleted_count
 
+    def _cleanup_heygem_temp_dir(self, directory: str) -> int:
+        """
+        清理 heygem temp 目录中的所有文件
+
+        Args:
+            directory: heygem temp 目录路径
+
+        Returns:
+            删除的文件数量
+        """
+        if not os.path.exists(directory):
+            return 0
+
+        deleted_count = 0
+
+        try:
+            for filename in os.listdir(directory):
+                file_path = os.path.join(directory, filename)
+                try:
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                        deleted_count += 1
+                        logger.debug(f"已清理 heygem temp 文件: {file_path}")
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path, ignore_errors=True)
+                        deleted_count += 1
+                        logger.debug(f"已清理 heygem temp 目录: {file_path}")
+                except PermissionError as e:
+                    logger.warning(f"跳过被占用的文件: {file_path}, 错误: {e}")
+                except Exception as e:
+                    logger.warning(f"删除文件失败: {file_path}, 错误: {e}")
+        except Exception as e:
+            logger.error(f"清理 heygem temp 目录失败: {directory}, 错误: {e}")
+
+        return deleted_count
+
     async def cleanup_task_files(
         self,
         task_id: str,
@@ -2111,10 +2147,22 @@ class WorkflowService:
         # 清理临时目录中包含 task_id 的文件
         if temp_dirs is None:
             temp_dirs = self.get_task_temp_dirs(task_id)
-        
+
         for directory in temp_dirs:
             deleted_files += self.cleanup_task_temp_files(task_id, directory)
-        
+
+        # 清理 heygem temp 目录中的临时文件
+        try:
+            from pathlib import Path
+            heygem_temp_dir = Path(__file__).parent.parent.parent / "engines" / "heygem" / "temp"
+            if heygem_temp_dir.exists():
+                heygem_deleted = self._cleanup_heygem_temp_dir(str(heygem_temp_dir))
+                if heygem_deleted > 0:
+                    deleted_files += heygem_deleted
+                    logger.info(f"已清理 heygem temp 目录: {heygem_deleted} 个文件")
+        except Exception as e:
+            logger.warning(f"清理 heygem temp 目录失败: {e}")
+
         # 清除检查点记录
         if self._db_initialized and self._db:
             try:
