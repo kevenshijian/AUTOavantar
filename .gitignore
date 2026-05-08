@@ -1,7 +1,16 @@
 # Dependencies
 frontend/node_modules/
+frontend/public/
+frontend/src/
+frontend/index.html
+frontend/package.json
+frontend/package-lock.json
+frontend/vite.config.js
+frontend/vitest.config.js
 backend/venv/
 backend/__pycache__/
+models/
+
 __pycache__/
 .claude/
 .codebuddy/
@@ -71,14 +80,17 @@ backend/tests/
 nodejs/
 .gstack/
 test/
-test/
+tests/
 
 # 打包产物
 AUTOavantar.spec
 git/
 nodejs/
 release/
-tools/generate_activation_code.py
+generate_activation_code.py
+desktop_launcher.spec
+desktop_launcher.py
+build_release.ps1
 
 # voicel 模型文件
 voicel/checkpoints/
@@ -89,7 +101,7 @@ voicel/outputs/
 config/license/private_key.pem
 
 # 打包输出目录（安装包不提交）
-release/installer/
+release/
 打包exe.bat
 分发打包.bat
 启动系统.bat
