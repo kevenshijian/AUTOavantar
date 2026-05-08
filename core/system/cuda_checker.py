@@ -1,13 +1,25 @@
 """
 CUDA 驱动检测服务
 检测 GPU 驱动版本是否满足 CUDA 12.x 要求
+
+特性：
+- 检测结果缓存到文件，避免每次启动都检测
+- 缓存有效期 7 天
+- 首次检测或缓存过期时才执行实际检测
 """
 
 import logging
+import json
+import time
+from pathlib import Path
 from typing import Optional
 from pydantic import BaseModel
 
 logger = logging.getLogger("autoavantar.cuda")
+
+# 缓存文件路径（在应用数据目录下）
+CACHE_FILE_NAME = "cuda_check_cache.json"
+CACHE_EXPIRE_DAYS = 7  # 缓存有效期 7 天
 
 
 class CUDACheckResult(BaseModel):
@@ -21,6 +33,8 @@ class CUDACheckResult(BaseModel):
     minimum_driver: str = "525.60.13"
     minimum_memory_gb: float = 6.0
     message: str = ""
+    cached: bool = False  # 是否来自缓存
+    check_time: Optional[float] = None  # 检测时间戳
 
 
 class CUDAChecker:
@@ -31,18 +45,84 @@ class CUDAChecker:
     - PyTorch 2.8.0+cu128 要求 CUDA 12.x
     - 最低驱动版本：525.60.13（NVIDIA 官方 CUDA 12.x 要求）
     - 最低显存：6GB（建议 8GB+）
+
+    缓存机制：
+    - 检测结果缓存到文件，有效期 7 天
+    - 首次运行或缓存过期时才执行实际检测
     """
 
     MINIMUM_DRIVER_VERSION = "525.60.13"
     MINIMUM_MEMORY_GB = 6.0
 
-    def __init__(self):
+    def __init__(self, app_dir: Optional[Path] = None):
         self._torch = None
         self._torch_available = False
-        self._check_torch()
+        self._app_dir = app_dir
+        self._cache_file: Optional[Path] = None
+        self._init_cache_file()
+        # 延迟加载 PyTorch，只在需要时才加载
+        logger.info("CUDA 检测器已初始化（延迟加载模式）")
 
-    def _check_torch(self):
-        """检查 PyTorch 是否可用"""
+    def _init_cache_file(self):
+        """初始化缓存文件路径"""
+        if self._app_dir:
+            cache_dir = self._app_dir / "backend" / "data"
+        else:
+            # 尝试从当前工作目录推断
+            cwd = Path.cwd()
+            if (cwd / "backend").exists():
+                cache_dir = cwd / "backend" / "data"
+            elif cwd.name == "backend":
+                cache_dir = cwd / "data"
+            else:
+                cache_dir = Path("backend/data")
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        self._cache_file = cache_dir / CACHE_FILE_NAME
+        logger.debug(f"CUDA 缓存文件: {self._cache_file}")
+
+    def _load_cache(self) -> Optional[CUDACheckResult]:
+        """加载缓存的检测结果"""
+        if not self._cache_file or not self._cache_file.exists():
+            return None
+
+        try:
+            with open(self._cache_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            check_time = data.get('check_time', 0)
+            age_days = (time.time() - check_time) / (24 * 3600)
+
+            if age_days > CACHE_EXPIRE_DAYS:
+                logger.info(f"CUDA 缓存已过期 ({age_days:.1f} 天)")
+                return None
+
+            result = CUDACheckResult(**data, cached=True)
+            logger.info(f"使用缓存的 CUDA 检测结果 ({age_days:.1f} 天前)")
+            return result
+
+        except Exception as e:
+            logger.warning(f"加载 CUDA 缓存失败: {e}")
+            return None
+
+    def _save_cache(self, result: CUDACheckResult):
+        """保存检测结果到缓存"""
+        if not self._cache_file:
+            return
+
+        try:
+            result.check_time = time.time()
+            with open(self._cache_file, 'w', encoding='utf-8') as f:
+                json.dump(result.model_dump(), f, ensure_ascii=False, indent=2)
+            logger.info(f"CUDA 检测结果已缓存到: {self._cache_file}")
+        except Exception as e:
+            logger.warning(f"保存 CUDA 缓存失败: {e}")
+
+    def _ensure_torch(self):
+        """确保 PyTorch 已加载"""
+        if self._torch is not None:
+            return
+
         try:
             import torch
             self._torch = torch
@@ -52,19 +132,34 @@ class CUDAChecker:
             logger.warning("PyTorch 未安装")
             self._torch_available = False
 
-    def check(self) -> CUDACheckResult:
+    def check(self, force: bool = False) -> CUDACheckResult:
         """
         执行 CUDA 检测
+
+        Args:
+            force: 是否强制重新检测（忽略缓存）
 
         Returns:
             CUDACheckResult: 检测结果
         """
+        # 尝试从缓存加载
+        if not force:
+            cached = self._load_cache()
+            if cached:
+                return cached
+
+        # 执行实际检测
+        logger.info("开始执行 CUDA 检测...")
+        self._ensure_torch()
+
         if not self._torch_available:
-            return CUDACheckResult(
+            result = CUDACheckResult(
                 available=False,
                 is_supported=False,
                 message="PyTorch CUDA 不可用。请检查 CUDA 安装或 GPU 驱动。"
             )
+            self._save_cache(result)
+            return result
 
         try:
             # 获取 GPU 信息
@@ -110,15 +205,18 @@ class CUDAChecker:
             )
 
             logger.info(f"CUDA 检测完成: {result.model_dump()}")
+            self._save_cache(result)
             return result
 
         except Exception as e:
             logger.error(f"CUDA 检测失败: {e}")
-            return CUDACheckResult(
+            result = CUDACheckResult(
                 available=False,
                 is_supported=False,
                 message=f"CUDA 检测失败: {str(e)}"
             )
+            self._save_cache(result)
+            return result
 
     def _get_driver_version(self) -> Optional[str]:
         """获取 NVIDIA 驱动版本"""
@@ -223,9 +321,26 @@ class CUDAChecker:
 _cuda_checker: Optional[CUDAChecker] = None
 
 
-def get_cuda_checker() -> CUDAChecker:
-    """获取 CUDA 检测器单例"""
+def get_cuda_checker(app_dir: Optional[Path] = None) -> CUDAChecker:
+    """
+    获取 CUDA 检测器单例
+
+    Args:
+        app_dir: 应用目录路径，用于确定缓存文件位置
+    """
     global _cuda_checker
     if _cuda_checker is None:
-        _cuda_checker = CUDAChecker()
+        _cuda_checker = CUDAChecker(app_dir)
+    return _cuda_checker
+
+
+def init_cuda_checker(app_dir: Path) -> CUDAChecker:
+    """
+    初始化 CUDA 检测器（在应用启动时调用）
+
+    Args:
+        app_dir: 应用目录路径
+    """
+    global _cuda_checker
+    _cuda_checker = CUDAChecker(app_dir)
     return _cuda_checker

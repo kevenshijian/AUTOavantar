@@ -55,11 +55,25 @@ class ConnectionManager:
             self.connections[task_id].discard(websocket)
             if not self.connections[task_id]:
                 del self.connections[task_id]
-        
+
         if websocket in self.last_activity:
             del self.last_activity[websocket]
-        
+
         logger.info(f"WebSocket 连接断开: task_id={task_id}")
+
+    async def disconnect_task(self, task_id: str):
+        """断开指定任务的所有连接"""
+        if task_id not in self.connections:
+            return
+
+        for websocket in list(self.connections[task_id]):
+            try:
+                await websocket.close(code=1000, reason="Task cancelled")
+            except Exception:
+                pass
+            self.disconnect(websocket, task_id)
+
+        logger.info(f"任务 {task_id} 的所有 WebSocket 连接已断开")
     
     async def send_message(self, websocket: WebSocket, message: dict):
         """发送消息给单个连接"""

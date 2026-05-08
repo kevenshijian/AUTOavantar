@@ -146,10 +146,14 @@ async def get_cuda_status():
     获取 CUDA 状态
 
     检测 GPU 驱动版本、CUDA 版本、显存等信息
+    结果会缓存 7 天，避免每次启动都检测
     → AC-001: 获取 CUDA 状态
     """
     try:
-        checker = get_cuda_checker()
+        from core.system.cuda_checker import get_cuda_checker
+
+        # 获取检测器并执行检测（会使用缓存）
+        checker = get_cuda_checker(get_app_dir())
         result = checker.check()
         return result
     except Exception as e:

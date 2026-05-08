@@ -2186,12 +2186,14 @@ async def init_workflow_service(
             logger.warning(f"读取低显存模式配置失败，使用默认值: {e}")
             low_memory_mode = False
 
-    # 如果未提供引擎，从配置创建
+    # 如果未提供引擎，从配置创建（强制使用 preload_model=False，避免阻塞事件循环）
     if tts_engine is None or heygem_engine is None:
         from core.engines import create_engines_from_config
-        engines = create_engines_from_config(low_memory_mode=low_memory_mode)
+        # 始终使用 preload_model=False，引擎将在后台线程中加载
+        engines = create_engines_from_config(low_memory_mode=True)  # 强制不预加载
         tts_engine = tts_engine or engines.get("tts_engine")
         heygem_engine = heygem_engine or engines.get("heygem_engine")
+        logger.info("引擎已创建（延迟加载模式），将在后台线程中加载模型")
 
     if _global_service is not None:
         _global_service.shutdown()
@@ -2223,6 +2225,26 @@ async def init_workflow_service(
                 logger.info(f"已恢复 {len(recovered)} 个未完成任务")
         except Exception as e:
             logger.error(f"恢复未完成任务失败: {e}")
+
+    # 在后台线程中加载引擎模型（不阻塞事件循环）
+    if not low_memory_mode:
+        import threading
+        def load_models_background():
+            try:
+                logger.info("后台线程开始加载引擎模型...")
+                if tts_engine and hasattr(tts_engine, 'load'):
+                    tts_engine.load()
+                    logger.info("TTSEngine 模型加载完成")
+                if heygem_engine and hasattr(heygem_engine, 'load'):
+                    heygem_engine.load()
+                    logger.info("HeyGemEngine 模型加载完成")
+                logger.info("所有引擎模型后台加载完成")
+            except Exception as e:
+                logger.error(f"后台加载引擎模型失败: {e}")
+
+        load_thread = threading.Thread(target=load_models_background, daemon=True)
+        load_thread.start()
+        logger.info("引擎模型后台加载线程已启动")
 
     logger.info(f"全局工作流服务已初始化（引擎模式），低显存模式: {low_memory_mode}")
     return _global_service

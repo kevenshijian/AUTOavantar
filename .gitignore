@@ -9,6 +9,10 @@ frontend/vite.config.js
 frontend/vitest.config.js
 backend/venv/
 backend/__pycache__/
+backend/logs/
+backend/output/
+backend/temp/
+backend/uploads/
 models/
 
 __pycache__/

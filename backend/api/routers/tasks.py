@@ -452,16 +452,20 @@ async def cancel_task(
 ):
     """
     取消任务（独立接口，兼容前端调用）
-    
+
     Args:
         task_id: 任务ID
-        
+
     Returns:
         取消结果
     """
     try:
+        # 先断开 WebSocket 连接，防止后续消息覆盖取消状态
+        from api.routers.websocket import manager
+        await manager.disconnect_task(task_id)
+
         success = await workflow_service.cancel_task(task_id)
-        
+
         if not success:
             raise HTTPException(status_code=400, detail="任务取消失败")
 
@@ -506,6 +510,9 @@ async def control_task(
             success = await workflow_service.resume_task(task_id)
             message = "任务恢复成功"
         elif action == "cancel":
+            # 先断开 WebSocket 连接，防止后续消息覆盖取消状态
+            from api.routers.websocket import manager
+            await manager.disconnect_task(task_id)
             success = await workflow_service.cancel_task(task_id)
             message = "任务取消成功"
         elif action == "retry":
@@ -553,12 +560,8 @@ async def start_task(
     try:
         await register_task_websocket(task_id, workflow_service)
 
-        # 等待 WebSocket 连接建立（最多 1 秒）
-        from api.routers.websocket import manager
-        connection_ready = await manager.wait_for_connection(task_id, timeout=1.0)
-        if not connection_ready:
-            logger.warning(f"WebSocket 连接未建立，任务 {task_id} 将继续执行但可能丢失初始状态更新")
-
+        # 不等待 WebSocket 连接，让任务立即启动
+        # WebSocket 连接会在后台建立，状态更新通过轮询机制也能获取
         success = await workflow_service.start_task(task_id)
 
         if not success:
