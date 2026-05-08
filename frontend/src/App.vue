@@ -130,6 +130,23 @@
         </el-footer>
       </el-container>
     </el-container>
+
+    <!-- CUDA 警告弹窗 -->
+    <CUDAWarningDialog
+      v-model="showCUDAWarning"
+      :message="cudaWarningMessage"
+      :gpu-info="cudaInfo"
+      @close="handleCUDAWarningClose"
+    />
+
+    <!-- 版本更新弹窗 -->
+    <UpdateDialog
+      v-model="showUpdateDialog"
+      :local-version="localVersion"
+      :remote-version="remoteVersion"
+      @update="handleUpdate"
+      @defer="handleDeferUpdate"
+    />
   </div>
 </template>
 
@@ -139,8 +156,11 @@ import { useRoute } from 'vue-router'
 import { useTaskStore } from '@/stores/taskStore'
 import { wsManager } from '@/utils/websocket'
 import websocketService from '@/services/websocket'
+import { settingsApi } from '@/services/api'
 import { ElMessage } from 'element-plus'
 import { Collection, Setting, HomeFilled, Bell, Sunny, Moon, Loading } from '@element-plus/icons-vue'
+import CUDAWarningDialog from '@/components/CUDAWarningDialog.vue'
+import UpdateDialog from '@/components/UpdateDialog.vue'
 
 const route = useRoute()
 const taskStore = useTaskStore()
@@ -149,6 +169,16 @@ const taskStore = useTaskStore()
 const isBackendReady = ref(false)
 const loadingMessage = ref('系统启动中...')
 const loadingHint = ref('')
+
+// CUDA 检测状态
+const showCUDAWarning = ref(false)
+const cudaWarningMessage = ref('')
+const cudaInfo = ref(null)
+
+// 版本更新状态
+const showUpdateDialog = ref(false)
+const localVersion = ref('1.0.0')
+const remoteVersion = ref('1.0.0')
 
 // 检查后端是否就绪
 const checkBackendReady = async () => {
@@ -163,6 +193,66 @@ const checkBackendReady = async () => {
     // 后端未就绪
   }
   return false
+}
+
+// 检测 CUDA 状态
+const checkCUDAStatus = async () => {
+  try {
+    const response = await fetch('/api/system/cuda-status')
+    const data = await response.json()
+    if (!data.is_supported) {
+      cudaWarningMessage.value = data.message
+      cudaInfo.value = data
+      showCUDAWarning.value = true
+    }
+    console.log('CUDA 检测结果:', data)
+  } catch (error) {
+    console.error('CUDA 检测失败:', error)
+  }
+}
+
+// 检测版本更新
+const checkVersionUpdate = async () => {
+  try {
+    const response = await fetch('/api/system/version')
+    const data = await response.json()
+    localVersion.value = data.local_version
+    remoteVersion.value = data.remote_version || data.local_version
+    if (data.has_update) {
+      showUpdateDialog.value = true
+    }
+    console.log('版本检测结果:', data)
+  } catch (error) {
+    console.error('版本检测失败:', error)
+  }
+}
+
+// 处理 CUDA 警告关闭
+const handleCUDAWarningClose = () => {
+  showCUDAWarning.value = false
+}
+
+// 处理更新
+const handleUpdate = async () => {
+  try {
+    const response = await fetch('/api/system/update', { method: 'POST' })
+    const data = await response.json()
+    if (data.success) {
+      ElMessage.success('更新已启动，应用将自动退出')
+      // 等待后端退出
+      setTimeout(() => {
+        window.close()
+      }, 2000)
+    }
+  } catch (error) {
+    console.error('触发更新失败:', error)
+    ElMessage.error('更新失败，请稍后重试')
+  }
+}
+
+// 处理稍后更新
+const handleDeferUpdate = () => {
+  showUpdateDialog.value = false
 }
 
 // 等待后端就绪
@@ -204,24 +294,40 @@ const isDarkTheme = ref(false)
 
 const prefersDarkScheme = window.matchMedia('(prefers-color-scheme: dark)')
 
-const savedTheme = localStorage.getItem('theme')
-if (savedTheme) {
-  isDarkTheme.value = savedTheme === 'dark'
-} else {
-  isDarkTheme.value = prefersDarkScheme.matches
+// 从后端加载主题设置
+const loadThemeFromServer = async () => {
+  try {
+    const response = await settingsApi.getTheme()
+    if (response.code === 200 && response.data?.theme) {
+      isDarkTheme.value = response.data.theme === 'dark'
+      console.log('从服务器加载主题:', response.data.theme)
+    }
+  } catch (error) {
+    console.error('加载主题设置失败:', error)
+    // 失败时使用 localStorage 或系统偏好
+    const savedTheme = localStorage.getItem('theme')
+    if (savedTheme) {
+      isDarkTheme.value = savedTheme === 'dark'
+    } else {
+      isDarkTheme.value = prefersDarkScheme.matches
+    }
+  }
 }
 
-const toggleTheme = () => {
+const toggleTheme = async () => {
   isDarkTheme.value = !isDarkTheme.value
-  localStorage.setItem('theme', isDarkTheme.value ? 'dark' : 'light')
-  console.log('Theme toggled to:', isDarkTheme.value ? 'dark' : 'light')
-  console.log('Body classes:', document.body.className)
-}
+  const theme = isDarkTheme.value ? 'dark' : 'light'
 
-const checkThemeStatus = () => {
-  console.log('Current isDarkTheme:', isDarkTheme.value)
-  console.log('Body classes:', document.body.className)
-  console.log('App element classes:', document.getElementById('app').className)
+  // 保存到 localStorage 作为备份
+  localStorage.setItem('theme', theme)
+
+  // 保存到后端
+  try {
+    await settingsApi.updateTheme(theme)
+    console.log('主题已保存到服务器:', theme)
+  } catch (error) {
+    console.error('保存主题设置失败:', error)
+  }
 }
 
 watch(isDarkTheme, (newValue) => {
@@ -296,6 +402,15 @@ onMounted(async () => {
   if (!isBackendReady.value) {
     return // 启动超时，不继续初始化
   }
+
+  // 检测 CUDA 状态
+  await checkCUDAStatus()
+
+  // 检测版本更新
+  await checkVersionUpdate()
+
+  // 加载主题设置
+  await loadThemeFromServer()
 
   prefersDarkScheme.addEventListener('change', (e) => {
     if (!localStorage.getItem('theme')) {

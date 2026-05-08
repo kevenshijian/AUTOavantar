@@ -145,7 +145,13 @@ export const settingsApi = {
   saveAllSettings: (data) => request.post('/api/settings', data),
 
   // 清理缓存
-  clearCache: () => request.post('/api/settings/clear-cache')
+  clearCache: () => request.post('/api/settings/clear-cache'),
+
+  // 获取主题设置
+  getTheme: () => request.get('/api/settings/theme'),
+
+  // 更新主题设置
+  updateTheme: (theme) => request.post('/api/settings/theme', { theme })
 }
 
 // 服务管理相关 API
@@ -223,6 +229,21 @@ export const tagApi = {
   syncEmotionsToYaml: () => request.post('/api/tags/emotions/sync')
 }
 
+// 许可证相关 API
+export const licenseApi = {
+  // 获取许可证状态
+  getStatus: () => request.get('/api/license/status'),
+
+  // 激活许可证
+  activate: (activationCode) => request.post('/api/license/activate', { activation_code: activationCode }),
+
+  // 检查配额
+  checkQuota: () => request.get('/api/license/quota'),
+
+  // 消耗配额
+  consumeQuota: () => request.post('/api/license/quota/consume')
+}
+
 // 导出便捷方法
 export const login = (username, password) => authApi.login(username, password)
 export const register = (username, email, password) => authApi.register(username, email, password)
@@ -235,5 +256,6 @@ export default {
   functions: functionsApi,
   tag: tagApi,
   services: servicesApi,
-  system: systemApi
+  system: systemApi,
+  license: licenseApi
 }

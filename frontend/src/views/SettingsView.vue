@@ -6,6 +6,96 @@
       </div>
 
       <el-form :model="settingsStore.settings" label-position="top">
+        <!-- 激活管理卡片 -->
+        <el-card class="settings-card" shadow="hover">
+          <template #header>
+            <div class="card-header">
+              <el-icon><Lock /></el-icon>
+              <span>系统激活</span>
+            </div>
+          </template>
+
+          <div class="activation-section">
+            <div class="activation-status">
+              <div class="status-row">
+                <span class="status-label">激活状态：</span>
+                <el-tag :type="activationStatus.isActivated ? 'success' : 'warning'" size="large">
+                  {{ activationStatus.isActivated ? '已激活' : '未激活' }}
+                </el-tag>
+              </div>
+
+              <div class="status-row" v-if="activationStatus.isActivated">
+                <span class="status-label">激活类型：</span>
+                <el-tag type="info" size="small">{{ formatLicenseType(activationStatus.licenseType) }}</el-tag>
+              </div>
+
+              <div class="status-row" v-if="activationStatus.isActivated">
+                <span class="status-label">有效期至：</span>
+                <span class="status-value">{{ formatExpiresAt(activationStatus.expiresAt) }}</span>
+              </div>
+
+              <div class="status-row" v-if="!activationStatus.isActivated">
+                <span class="status-label">剩余配额：</span>
+                <span class="status-value">{{ activationStatus.remainingQuota }} / {{ activationStatus.maxQuota }}</span>
+              </div>
+
+              <div class="status-row">
+                <span class="status-label">机器码：</span>
+                <div class="machine-code-wrapper">
+                  <code class="machine-code">{{ activationStatus.machineCode }}</code>
+                  <el-button text type="primary" size="small" @click="copyMachineCode">
+                    <el-icon><CopyDocument /></el-icon>
+                    复制
+                  </el-button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 联系信息和价格信息 -->
+            <div class="activation-info" v-if="!activationStatus.isActivated">
+              <el-divider content-position="left">激活说明</el-divider>
+              <div class="info-section">
+                <p class="info-text sales-info">
+                  免费版每天可以生成10条视频，个人使用已经完全足够，若需解锁工作室版请联系作者
+                </p>
+                <div class="price-info">
+                  <p class="price-title">价格信息：</p>
+                  <ul class="price-list">
+                    <li>一年 <span class="price">69元</span></li>
+                    <li>三年 <span class="price">128元</span></li>
+                    <li>终身 <span class="price original">1280元</span> <span class="discount">限时特惠仅需 <span class="special-price">398元</span></span></li>
+                  </ul>
+                </div>
+                <div class="contact-info">
+                  <p class="contact-title">联系方式：</p>
+                  <p class="contact-detail">微信：<span class="highlight">me-orzing</span> (13145981227)</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="activation-actions">
+              <el-button
+                v-if="!activationStatus.isActivated"
+                type="primary"
+                @click="showActivationDialog"
+              >
+                <el-icon><Key /></el-icon>
+                输入激活码
+              </el-button>
+              <el-button
+                v-else
+                type="info"
+                plain
+                @click="refreshActivationStatus"
+                :loading="activationLoading"
+              >
+                <el-icon><Refresh /></el-icon>
+                刷新状态
+              </el-button>
+            </div>
+          </div>
+        </el-card>
+
         <el-card class="settings-card" shadow="hover">
           <template #header>
             <div class="card-header">
@@ -171,8 +261,8 @@
           <div class="low-memory-mode-section">
             <div class="low-memory-mode-header">
               <span class="low-memory-mode-label">低显存模式</span>
-              <el-switch 
-                v-model="lowMemoryMode" 
+              <el-switch
+                v-model="lowMemoryMode"
                 :loading="lowMemoryModeLoading"
                 @change="handleLowMemoryModeChange"
               />
@@ -186,6 +276,12 @@
         <TagGroupManager />
 
         <EmotionTagManager />
+
+        <!-- 激活对话框 -->
+        <ActivationDialog
+          v-model="activationDialogVisible"
+          @activated="handleActivated"
+        />
 
         <el-card class="settings-card" shadow="hover">
           <template #header>
@@ -227,12 +323,13 @@
 import { ref, computed, onMounted, inject } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Key, Document, Setting, Delete, Monitor
+  Key, Document, Setting, Delete, Monitor, Lock, CopyDocument, Refresh
 } from '@element-plus/icons-vue'
-import { settingsApi, systemApi } from '@/services/api'
+import { settingsApi, systemApi, licenseApi } from '@/services/api'
 import { useSettingsStore } from '@/stores/settingsStore.js'
 import TagGroupManager from '@/components/TagGroupManager.vue'
 import EmotionTagManager from '@/components/EmotionTagManager.vue'
+import ActivationDialog from '@/components/ActivationDialog.vue'
 
 // 注入主题状态
 const isDarkTheme = inject('isDarkTheme', ref(false))
@@ -244,6 +341,18 @@ const clearingCache = ref(false)
 // 低显存模式
 const lowMemoryMode = ref(false)
 const lowMemoryModeLoading = ref(false)
+
+// 激活相关
+const activationDialogVisible = ref(false)
+const activationLoading = ref(false)
+const activationStatus = ref({
+  isActivated: false,
+  machineCode: '',
+  remainingQuota: 0,
+  maxQuota: 0,
+  licenseType: '',
+  expiresAt: null
+})
 
 // 获取系统配置
 const fetchSystemConfig = async () => {
@@ -360,9 +469,74 @@ const clearCache = async () => {
   }
 }
 
+// 激活相关方法
+const fetchActivationStatus = async () => {
+  activationLoading.value = true
+  try {
+    const response = await licenseApi.getStatus()
+    activationStatus.value = {
+      isActivated: response.is_activated,
+      machineCode: response.machine_code,
+      remainingQuota: response.remaining_quota,
+      maxQuota: response.max_quota,
+      licenseType: response.license_type || '',
+      expiresAt: response.expires_at || null
+    }
+  } catch (error) {
+    console.error('获取激活状态失败:', error)
+    ElMessage.error('获取激活状态失败')
+  } finally {
+    activationLoading.value = false
+  }
+}
+
+// 格式化激活类型显示
+const formatLicenseType = (type) => {
+  const typeMap = {
+    'yearly': '一年期',
+    'three_year': '三年期',
+    'lifetime': '终身'
+  }
+  return typeMap[type] || type || '未知'
+}
+
+// 格式化过期时间显示
+const formatExpiresAt = (expiresAt) => {
+  if (!expiresAt) return '永久有效'
+  try {
+    const date = new Date(expiresAt)
+    return date.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
+  } catch {
+    return expiresAt
+  }
+}
+
+const showActivationDialog = () => {
+  activationDialogVisible.value = true
+}
+
+const handleActivated = () => {
+  fetchActivationStatus()
+  ElMessage.success('系统已激活')
+}
+
+const refreshActivationStatus = () => {
+  fetchActivationStatus()
+}
+
+const copyMachineCode = async () => {
+  try {
+    await navigator.clipboard.writeText(activationStatus.value.machineCode)
+    ElMessage.success('机器码已复制到剪贴板')
+  } catch (error) {
+    ElMessage.error('复制失败')
+  }
+}
+
 onMounted(() => {
   settingsStore.fetchSettings()
   fetchSystemConfig()
+  fetchActivationStatus()
 })
 </script>
 
@@ -663,6 +837,221 @@ onMounted(() => {
 
 .dark-theme .low-memory-mode-hint {
   color: #718096;
+}
+
+/* 激活部分样式 */
+.activation-section {
+  padding: 8px 0;
+}
+
+.activation-status {
+  margin-bottom: 20px;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.status-row:last-child {
+  margin-bottom: 0;
+}
+
+.status-label {
+  font-weight: 500;
+  color: #606266;
+  min-width: 80px;
+}
+
+.dark-theme .status-label {
+  color: #a0aec0;
+}
+
+.status-value {
+  color: #303133;
+  font-weight: 600;
+}
+
+.dark-theme .status-value {
+  color: #fff;
+}
+
+.machine-code-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.machine-code {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 14px;
+  letter-spacing: 1px;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 6px 12px;
+  border-radius: 4px;
+  color: #303133;
+}
+
+.dark-theme .machine-code {
+  background: rgba(255, 255, 255, 0.08);
+  color: #00d9ff;
+}
+
+.activation-actions {
+  margin-top: 16px;
+}
+
+/* 激活信息样式 */
+.activation-info {
+  margin-top: 16px;
+}
+
+.activation-info :deep(.el-divider__text) {
+  color: #606266;
+  font-size: 14px;
+}
+
+.dark-theme .activation-info :deep(.el-divider__text) {
+  color: #a0aec0;
+}
+
+.info-section {
+  padding: 12px 16px;
+  background: rgba(0, 0, 0, 0.02);
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.dark-theme .info-section {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+.info-text {
+  margin: 0 0 16px 0;
+  color: #606266;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.dark-theme .info-text {
+  color: #a0aec0;
+}
+
+.sales-info {
+  padding-bottom: 12px;
+  border-bottom: 1px dashed rgba(0, 0, 0, 0.1);
+}
+
+.dark-theme .sales-info {
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+.price-info,
+.contact-info {
+  margin-bottom: 12px;
+}
+
+.contact-info {
+  margin-bottom: 0;
+}
+
+.price-title,
+.contact-title {
+  margin: 0 0 8px 0;
+  font-weight: 600;
+  color: #303133;
+  font-size: 14px;
+}
+
+.dark-theme .price-title,
+.dark-theme .contact-title {
+  color: #fff;
+}
+
+.price-list {
+  margin: 0;
+  padding-left: 20px;
+  list-style: none;
+}
+
+.price-list li {
+  margin: 6px 0;
+  color: #606266;
+  font-size: 14px;
+  position: relative;
+}
+
+.price-list li::before {
+  content: '•';
+  position: absolute;
+  left: -12px;
+  color: #409EFF;
+}
+
+.dark-theme .price-list li {
+  color: #a0aec0;
+}
+
+.dark-theme .price-list li::before {
+  color: #00d9ff;
+}
+
+.price {
+  font-weight: 600;
+  color: #409EFF;
+}
+
+.dark-theme .price {
+  color: #00d9ff;
+}
+
+.price.original {
+  color: #909399;
+  text-decoration: line-through;
+}
+
+.dark-theme .price.original {
+  color: #718096;
+}
+
+.discount {
+  color: #e6a23c;
+  font-size: 13px;
+}
+
+.dark-theme .discount {
+  color: #f0c040;
+}
+
+.special-price {
+  font-weight: 700;
+  color: #f56c6c;
+  font-size: 16px;
+}
+
+.dark-theme .special-price {
+  color: #ff6b6b;
+}
+
+.contact-detail {
+  margin: 0;
+  color: #606266;
+  font-size: 14px;
+}
+
+.dark-theme .contact-detail {
+  color: #a0aec0;
+}
+
+.highlight {
+  font-weight: 600;
+  color: #409EFF;
+}
+
+.dark-theme .highlight {
+  color: #00d9ff;
 }
 
 .deerflow-badge {

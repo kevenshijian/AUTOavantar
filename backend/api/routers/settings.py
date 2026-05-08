@@ -118,6 +118,11 @@ class DefaultParamsRequest(BaseModel):
     tts_emo_weight: float = 0.4
 
 
+class ThemeRequest(BaseModel):
+    """主题设置请求"""
+    theme: str = "dark"  # "dark" 或 "light"
+
+
 class SettingsData(BaseModel):
     """设置数据"""
     deepseek_api_key: str = ""
@@ -163,6 +168,11 @@ def _get_prompt_templates_path() -> str:
 def _get_default_params_path() -> str:
     """获取默认参数配置路径"""
     return os.path.join(CONFIG_DIR, "default_params.yaml")
+
+
+def _get_theme_path() -> str:
+    """获取主题配置路径"""
+    return os.path.join(CONFIG_DIR, "theme.yaml")
 
 
 def _load_yaml(file_path: str, default: Dict = None) -> Dict:
@@ -297,6 +307,47 @@ async def update_default_params(request: DefaultParamsRequest):
         return SaveResponse(code=200, message="默认参数已保存")
     except Exception as e:
         logger.error(f"保存失败: {e}")
+        return SaveResponse(code=500, message=f"保存失败: {str(e)}")
+
+
+class ThemeResponse(BaseModel):
+    """主题响应"""
+    code: int
+    message: str
+    data: Dict[str, str]
+
+
+@router.get("/theme", response_model=ThemeResponse)
+async def get_theme():
+    """获取主题设置"""
+    try:
+        theme_data = _load_yaml(_get_theme_path(), {"theme": "dark"})
+        return ThemeResponse(
+            code=200,
+            message="获取成功",
+            data={"theme": theme_data.get("theme", "dark")}
+        )
+    except Exception as e:
+        logger.error(f"获取主题失败: {e}")
+        return ThemeResponse(
+            code=200,
+            message="使用默认主题",
+            data={"theme": "dark"}
+        )
+
+
+@router.post("/theme", response_model=SaveResponse)
+async def update_theme(request: ThemeRequest):
+    """更新主题设置"""
+    try:
+        theme = request.theme.lower()
+        if theme not in ["dark", "light"]:
+            theme = "dark"
+        _save_yaml(_get_theme_path(), {"theme": theme})
+        logger.info(f"主题设置已保存: {theme}")
+        return SaveResponse(code=200, message="主题设置已保存")
+    except Exception as e:
+        logger.error(f"保存主题失败: {e}")
         return SaveResponse(code=500, message=f"保存失败: {str(e)}")
 
 

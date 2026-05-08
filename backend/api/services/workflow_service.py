@@ -729,6 +729,17 @@ class WorkflowService:
                 task.output_path = result.output_path
                 task.result = result
 
+                # CR-001: 任务成功完成时消耗配额
+                try:
+                    from api.services.license_service import get_license_service
+                    license_service = get_license_service()
+                    license_status = license_service.get_license_status()
+                    if not license_status.is_activated:
+                        license_service.consume_quota()
+                        logger.info(f"任务 {task_id} 完成，配额已消耗")
+                except Exception as quota_err:
+                    logger.error(f"配额消耗失败: {quota_err}")
+
                 if self._db_initialized and self._db:
                     try:
                         await self._db.task_update(

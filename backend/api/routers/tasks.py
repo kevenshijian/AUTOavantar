@@ -113,15 +113,30 @@ async def create_task(
 ):
     """
     创建新任务（使用工作流服务异步执行）
-    
+
     创建后会自动注册 WebSocket 通知回调
-    
+
     Args:
         request: 任务创建请求参数
-        
+
     Returns:
         创建的任务信息
     """
+    # 配额检查（任务创建环节）
+    from api.services.license_service import get_license_service
+    license_service = get_license_service()
+    license_status = license_service.get_license_status()
+
+    # CR-001: 配额检查分散到四环节，任务创建时只检查不消耗
+    if not license_status.is_activated:
+        quota_result = license_service.check_quota_for_stage("create")
+        if not quota_result.has_quota:
+            raise HTTPException(
+                status_code=403,
+                detail=f"今日配额已用完，未激活用户每日限制 {quota_result.max_quota} 个任务。请激活后继续使用。"
+            )
+        logger.info(f"未激活用户配额检查通过，剩余配额: {quota_result.remaining}")
+
     try:
         enable_double_mode = request.enable_double_mode
         left_prompt_audio_path = request.left_prompt_audio_path or ""
@@ -538,9 +553,9 @@ async def start_task(
     try:
         await register_task_websocket(task_id, workflow_service)
 
-        # 等待 WebSocket 连接建立（最多 2 秒）
+        # 等待 WebSocket 连接建立（最多 1 秒）
         from api.routers.websocket import manager
-        connection_ready = await manager.wait_for_connection(task_id, timeout=2.0)
+        connection_ready = await manager.wait_for_connection(task_id, timeout=1.0)
         if not connection_ready:
             logger.warning(f"WebSocket 连接未建立，任务 {task_id} 将继续执行但可能丢失初始状态更新")
 

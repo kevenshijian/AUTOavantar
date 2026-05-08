@@ -12,9 +12,7 @@ logs/
 claude.md
 
 # Build outputs
-frontend/dist/
 build/
-dist/
 
 # Environment
 .env
@@ -70,14 +68,17 @@ voicel/outputs/
 shared_cache/
 specs/
 backend/tests/
-node-v24.0.0-win-x64/
+nodejs/
 .gstack/
+test/
+test/
 
 # 打包产物
 AUTOavantar.spec
 git/
 nodejs/
 release/
+tools/generate_activation_code.py
 
 # voicel 模型文件
 voicel/checkpoints/
@@ -89,3 +90,6 @@ config/license/private_key.pem
 
 # 打包输出目录（安装包不提交）
 release/installer/
+打包exe.bat
+分发打包.bat
+启动系统.bat

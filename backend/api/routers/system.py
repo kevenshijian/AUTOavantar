@@ -1,18 +1,71 @@
 """
 系统配置 API 路由
 提供低显存模式等系统级设置的获取和更新接口
+以及 CUDA 检测和版本更新功能
 """
 
 import logging
+import subprocess
+import urllib.request
+import urllib.error
+from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+import sys
 
 from core.system_config import get_config_manager
+from core.system.cuda_checker import get_cuda_checker, CUDACheckResult
 
 logger = logging.getLogger("autoavantar-api")
 
 router = APIRouter()
+
+# 版本检测配置
+VERSION_URL = "https://raw.githubusercontent.com/Eikwang/AUTOavantar/main/VERSION"
+UPDATE_URL = "https://github.com/Eikwang/AUTOavantar/releases"
+
+
+def get_app_dir() -> Path:
+    """获取应用程序目录"""
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).parent
+    else:
+        return Path(__file__).parent.parent.parent.parent
+
+
+def read_local_version() -> str:
+    """读取本地版本号"""
+    version_file = get_app_dir() / "VERSION"
+    if version_file.exists():
+        return version_file.read_text(encoding='utf-8').strip()
+    return "1.0.0"
+
+
+def fetch_remote_version() -> Optional[str]:
+    """从 GitHub 获取远程版本号"""
+    try:
+        req = urllib.request.Request(VERSION_URL, method='GET')
+        req.add_header('User-Agent', 'AUTOavantar-Version-Check')
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return response.read().decode('utf-8').strip()
+    except Exception as e:
+        logger.warning(f"获取远程版本失败: {e}")
+        return None
+
+
+def compare_versions(v1: str, v2: str) -> int:
+    """比较版本号，返回 -1/0/1"""
+    def parse(v: str) -> tuple:
+        return tuple(int(p) for p in v.split('.') if p.isdigit())
+    try:
+        p1, p2 = parse(v1), parse(v2)
+        max_len = max(len(p1), len(p2))
+        p1 = p1 + (0,) * (max_len - len(p1))
+        p2 = p2 + (0,) * (max_len - len(p2))
+        return (p1 > p2) - (p1 < p2)
+    except Exception:
+        return 0
 
 
 class SystemConfigResponse(BaseModel):
@@ -23,6 +76,20 @@ class SystemConfigResponse(BaseModel):
 class SystemConfigUpdateRequest(BaseModel):
     """系统配置更新请求模型"""
     low_memory_mode: Optional[bool] = None
+
+
+class VersionInfo(BaseModel):
+    """版本信息模型"""
+    local_version: str
+    remote_version: Optional[str] = None
+    has_update: bool = False
+    update_url: str = UPDATE_URL
+
+
+class UpdateResponse(BaseModel):
+    """更新响应模型"""
+    success: bool
+    message: str
 
 
 @router.get("/config", response_model=SystemConfigResponse)
@@ -71,3 +138,80 @@ async def update_system_config(request: SystemConfigUpdateRequest):
     except Exception as e:
         logger.error(f"更新系统配置失败: {e}")
         raise HTTPException(status_code=500, detail=f"更新系统配置失败: {str(e)}")
+
+
+@router.get("/cuda-status", response_model=CUDACheckResult)
+async def get_cuda_status():
+    """
+    获取 CUDA 状态
+
+    检测 GPU 驱动版本、CUDA 版本、显存等信息
+    → AC-001: 获取 CUDA 状态
+    """
+    try:
+        checker = get_cuda_checker()
+        result = checker.check()
+        return result
+    except Exception as e:
+        logger.error(f"CUDA 检测失败: {e}")
+        return CUDACheckResult(
+            available=False,
+            is_supported=False,
+            message=f"CUDA 检测失败: {str(e)}"
+        )
+
+
+@router.get("/version", response_model=VersionInfo)
+async def get_version_info():
+    """
+    获取版本信息
+
+    返回本地版本和远程版本信息，用于检测更新
+    → AC-002: 获取版本信息
+    """
+    try:
+        local_version = read_local_version()
+        remote_version = fetch_remote_version()
+
+        has_update = False
+        if remote_version:
+            has_update = compare_versions(remote_version, local_version) > 0
+
+        return VersionInfo(
+            local_version=local_version,
+            remote_version=remote_version,
+            has_update=has_update,
+            update_url=UPDATE_URL
+        )
+    except Exception as e:
+        logger.error(f"获取版本信息失败: {e}")
+        return VersionInfo(
+            local_version=read_local_version(),
+            remote_version=None,
+            has_update=False
+        )
+
+
+@router.post("/update", response_model=UpdateResponse)
+async def trigger_update():
+    """
+    触发更新流程
+
+    创建更新标记文件，通知启动器执行更新
+    → AC-003: 触发更新流程
+    """
+    try:
+        app_dir = get_app_dir()
+        update_flag_file = app_dir / ".update_pending"
+
+        # 创建更新标记
+        update_flag_file.write_text("pending", encoding='utf-8')
+        logger.info("更新标记已创建")
+
+        return UpdateResponse(
+            success=True,
+            message="更新已启动，应用将自动退出"
+        )
+    except Exception as e:
+        logger.error(f"触发更新失败: {e}")
+        raise HTTPException(status_code=500, detail=f"触发更新失败: {str(e)}")

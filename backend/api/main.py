@@ -221,15 +221,21 @@ app = FastAPI(
 )
 
 
-# 添加验证错误处理器，打印详细错误信息
+# 添加验证错误处理器
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc: RequestValidationError):
-    """捕获验证错误并打印详细信息"""
-    logger.error(f"请求验证失败: {exc.errors()}")
-    logger.error(f"请求体: {exc.body}")
+    """
+    捕获验证错误
+
+    安全说明：生产环境不记录请求体，防止敏感信息泄露
+    """
+    # 仅记录错误类型，不记录具体内容
+    error_types = [e.get("type", "unknown") for e in exc.errors()]
+    logger.warning(f"请求验证失败: {error_types}")
+
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors()}
+        content={"detail": "请求参数验证失败"}
     )
 
 # 配置 CORS
