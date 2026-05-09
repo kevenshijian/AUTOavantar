@@ -3,7 +3,6 @@
 提供异步数据库操作，支持任务、素材等数据管理（已移除用户认证功能）
 """
 
-import asyncio
 import aiosqlite
 import json
 import logging
@@ -24,7 +23,6 @@ class DatabaseService:
     def __init__(self, db_path: str = DATABASE_PATH):
         self.db_path = db_path
         self._connection: Optional[aiosqlite.Connection] = None
-        self._lock = asyncio.Lock()
 
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
 

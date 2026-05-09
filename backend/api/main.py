@@ -132,24 +132,6 @@ async def load_engines_background(db=None):
         logger.error(f"后台加载引擎失败: {e}")
 
 
-async def check_cuda_background():
-    """后台执行 CUDA 检测（不阻塞 API 启动）"""
-    try:
-        logger.info("开始后台 CUDA 检测...")
-        from core.system.cuda_checker import get_cuda_checker
-
-        # 获取检测器并执行检测（会使用缓存）
-        checker = get_cuda_checker(base_dir)
-        result = checker.check()
-
-        if result.is_supported:
-            logger.info(f"CUDA 检测通过: {result.gpu_name}, 驱动 {result.driver_version}")
-        else:
-            logger.warning(f"CUDA 检测警告: {result.message}")
-    except Exception as e:
-        logger.warning(f"CUDA 后台检测失败: {e}")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理
@@ -189,10 +171,6 @@ async def lifespan(app: FastAPI):
     engine_load_task = asyncio.create_task(load_engines_background(db))
     logger.info("引擎后台加载任务已启动")
 
-    # 5. 后台执行 CUDA 检测（不阻塞 API 启动）
-    cuda_check_task = asyncio.create_task(check_cuda_background())
-    logger.info("CUDA 后台检测任务已启动")
-
     # API 已就绪，可以开始接收请求
     logger.info("=" * 50)
     logger.info("✅ AUTOavantar API 服务已就绪")
@@ -207,17 +185,12 @@ async def lifespan(app: FastAPI):
     # 取消后台任务
     heartbeat_task.cancel()
     engine_load_task.cancel()
-    cuda_check_task.cancel()
     try:
         await heartbeat_task
     except asyncio.CancelledError:
         pass
     try:
         await engine_load_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await cuda_check_task
     except asyncio.CancelledError:
         pass
     logger.info("后台任务已停止")

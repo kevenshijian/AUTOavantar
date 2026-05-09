@@ -218,10 +218,9 @@ class WorkflowService:
         self._tasks: Dict[str, AsyncTask] = {}
         self._callbacks: Dict[str, TaskCallback] = {}
         self._workflows: Dict[str, DigitalHumanWorkflow] = {}
-        self._status_lock = asyncio.Lock()
+        self._status_lock: Optional[asyncio.Lock] = None  # 延迟创建
         self._db: Optional[DatabaseService] = None
         self._db_initialized = False
-        self._lock = asyncio.Lock()
         self._tasks_loaded_from_db = False
         self._main_loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -1168,6 +1167,9 @@ class WorkflowService:
 
     async def _update_progress(self, task_id: str, progress: float, stage: str):
         """更新任务进度"""
+        # 延迟创建锁，确保在异步上下文中创建
+        if self._status_lock is None:
+            self._status_lock = asyncio.Lock()
         async with self._status_lock:
             task = self._tasks.get(task_id)
             if task:

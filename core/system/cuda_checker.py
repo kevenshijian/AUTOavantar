@@ -220,8 +220,17 @@ class CUDAChecker:
 
     def _get_driver_version(self) -> Optional[str]:
         """获取 NVIDIA 驱动版本"""
+        # 方法1: Windows 注册表（最可靠，不依赖 PATH）
         try:
-            # 方法1: 通过 nvidia-smi 获取
+            version = self._get_driver_version_windows()
+            if version:
+                logger.debug(f"从注册表获取驱动版本: {version}")
+                return version
+        except Exception as e:
+            logger.debug(f"注册表获取驱动版本失败: {e}")
+
+        # 方法2: 通过 nvidia-smi 获取（需要系统 PATH）
+        try:
             import subprocess
             result = subprocess.run(
                 ['nvidia-smi', '--query-gpu=driver_version', '--format=csv,noheader'],
@@ -232,27 +241,10 @@ class CUDAChecker:
             if result.returncode == 0:
                 version = result.stdout.strip()
                 if version:
+                    logger.debug(f"从 nvidia-smi 获取驱动版本: {version}")
                     return version
-        except Exception:
-            pass
-
-        try:
-            # 方法2: 通过 PyTorch 获取
-            if self._torch:
-                # torch.cuda.get_device_properties 不直接提供驱动版本
-                # 但可以通过 torch.utils.cmake_prefix_path 推断
-                pass
-        except Exception:
-            pass
-
-        try:
-            # 方法3: Windows 注册表
-            if hasattr(self, '_get_driver_version_windows'):
-                version = self._get_driver_version_windows()
-                if version:
-                    return version
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"nvidia-smi 获取驱动版本失败: {e}")
 
         return None
 

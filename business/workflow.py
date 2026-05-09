@@ -12,7 +12,6 @@ from dataclasses import dataclass
 import yaml
 
 from core.models.task import Task, TaskStatus, TaskConfig, ScriptSegment, SceneType
-from core.scheduler import TaskScheduler
 from core.monitor import ResourceMonitor, get_monitor
 from core.engines import create_engines_from_config
 from core.paths import get_path_manager, init_path_manager
