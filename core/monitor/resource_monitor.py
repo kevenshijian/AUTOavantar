@@ -50,7 +50,7 @@ class ResourceStatus:
     disk_total: float = 0.0  # 总磁盘空间 GB
     disk_free: float = 0.0  # 剩余磁盘空间 GB
     
-    # GPU 锁状态
+    # GPU 锁状态（已移除，gpu_lock 模块不存在）
     gpu_lock_status: Optional[Dict[str, Any]] = None
     
     # 时间戳
@@ -244,7 +244,7 @@ class ResourceMonitor:
     def get_all_status(self) -> ResourceStatus:
         """
         获取所有资源状态
-        
+
         Returns:
             ResourceStatus 对象
         """
@@ -252,32 +252,14 @@ class ResourceMonitor:
         cpu_status = self.get_cpu_status()
         memory_status = self.get_memory_status()
         disk_status = self.get_disk_status()
-        
-        gpu_lock_status = self._get_gpu_lock_status()
-        
+
         return ResourceStatus(
             **gpu_status,
             **cpu_status,
             **memory_status,
             **disk_status,
-            gpu_lock_status=gpu_lock_status,
             timestamp=datetime.now()
         )
-    
-    def _get_gpu_lock_status(self) -> Optional[Dict[str, Any]]:
-        """
-        获取 GPU 锁状态
-        
-        Returns:
-            GPU 锁状态字典
-        """
-        try:
-            from core.scheduler.gpu_lock import get_gpu_lock
-            gpu_lock = get_gpu_lock()
-            return gpu_lock.get_status()
-        except Exception as e:
-            logger.debug(f"获取 GPU 锁状态失败: {e}")
-            return None
     
     def is_resources_available(self) -> bool:
         """
@@ -353,14 +335,7 @@ class ResourceMonitor:
         summary.append(f"CPU: {status.cpu_percent:.1f}%")
         summary.append(f"内存：{status.memory_percent:.1f}%")
         summary.append(f"磁盘：{status.disk_percent:.1f}% (剩余 {status.disk_free:.1f}GB)")
-        
-        if status.gpu_lock_status:
-            holder = status.gpu_lock_status.get("current_holder")
-            if holder:
-                summary.append(f"GPU锁: {holder.get('task_id', 'unknown')}")
-            else:
-                summary.append("GPU锁: 空闲")
-        
+
         return " | ".join(summary)
 
 

@@ -50,7 +50,7 @@ def fetch_remote_version() -> Optional[str]:
         with urllib.request.urlopen(req, timeout=5) as response:
             return response.read().decode('utf-8').strip()
     except Exception as e:
-        logger.warning(f"获取远程版本失败: {e}")
+        logger.debug(f"获取远程版本失败: {e}")
         return None
 
 

@@ -109,3 +109,4 @@ release/
 打包exe.bat
 分发打包.bat
 启动系统.bat
+start_system.py
