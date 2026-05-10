@@ -14,6 +14,7 @@ backend/output/
 backend/temp/
 backend/uploads/
 models/
+.bg-shell/
 
 __pycache__/
 .claude/
