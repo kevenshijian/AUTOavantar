@@ -87,7 +87,7 @@ def setup_environment(base_dir: Path) -> dict:
     env["HF_HOME"] = str(base_dir / "hf_download")
     env["TRANSFORMERS_CACHE"] = str(base_dir / "tf_download")
     env["XFORMERS_FORCE_DISABLE_TRITON"] = "1"
-    env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
+    env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:256"
     env["HF_HUB_OFFLINE"] = "1"
     env["TRANSFORMERS_OFFLINE"] = "1"
 

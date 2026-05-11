@@ -1087,9 +1087,21 @@ def init_wh_process(in_queue, out_queue, terminate_event=None):
         out_queue: 输出队列
         terminate_event: 终止信号事件（可选）
     """
-    face_detector = FaceDetect(cpu=False, model_path='face_detect_utils/resources/')
-    plfd = pfpld(cpu=False, model_path='face_detect_utils/resources/')
-    logger.info('>>> init_wh_process进程启动')
+    try:
+        logger.info('>>> init_wh_process 开始加载模型...')
+        s_model = time.time()
+        face_detector = FaceDetect(cpu=False, model_path='face_detect_utils/resources/')
+        plfd = pfpld(cpu=False, model_path='face_detect_utils/resources/')
+        logger.info(f'>>> init_wh_process 模型加载完成，耗时：{time.time() - s_model:.2f}s')
+        logger.info('>>> init_wh_process 进程启动')
+
+        # 发送就绪信号到输出队列
+        out_queue.put(['__INIT_READY__', 0, False])
+        logger.info('>>> init_wh_process 已发送就绪信号')
+    except Exception as e:
+        logger.error(f'>>> init_wh_process 模型加载失败：{e}')
+        out_queue.put(['__INIT_ERROR__', str(e), False])
+        return
 
     # GPU 模型列表，用于清理时释放
     gpu_models = [face_detector, plfd]
@@ -1119,6 +1131,8 @@ def init_wh_process(in_queue, out_queue, terminate_event=None):
                 continue
             code = queue_data[0]
             driver_path = queue_data[1]
+            logger.info(f'[{code}] init_wh_process 开始处理: {driver_path}')
+            s_task = time.time()
             # try:
             #     with open("face_lib/face.json", "r", encoding="utf-8") as file:
             #         target_face_id_data = json.load(file)
@@ -1193,7 +1207,7 @@ def init_wh_process(in_queue, out_queue, terminate_event=None):
             else:
                 wh = np.mean(np.array(wh_list))
                 
-            logger.info(f'[{code}]init_wh result :[{wh}]， cost: {time.time() - s} s')
+            logger.info(f'[{code}]init_wh result :[{wh}], cost: {time.time() - s:.2f}s, 总耗时：{time.time() - s_task:.2f}s')
             torch.cuda.empty_cache()
             out_queue.put([code, wh, has_multi_face])
         except Exception as e:
@@ -1282,7 +1296,7 @@ def init_wh(code, drivered_path, target_face_id=0):
     else:
         wh = np.mean(np.array(wh_list))
         
-    logger.info(f'[{code}]init_wh result :[{wh}]， cost: {time.time() - s} s')
+    logger.info(f'[{code}]init_wh result :[{wh}], cost: {time.time() - s:.2f}s, 总耗时：{time.time() - s_task:.2f}s')
     torch.cuda.empty_cache()
     return wh
 
@@ -1372,6 +1386,17 @@ class TransDhTask(object):
         )
         self._init_wh_process.start()
 
+        # 等待子进程就绪（模型加载完成）
+        logger.info('TransDhTask 等待 init_wh_process 子进程就绪...')
+        try:
+            init_result = self.init_wh_queue_output.get(timeout=60)  # 60 秒超时
+            if init_result[0] == '__INIT_READY__':
+                logger.info('TransDhTask: init_wh_process 子进程已就绪')
+            elif init_result[0] == '__INIT_ERROR__':
+                logger.error(f'TransDhTask: init_wh_process 子进程初始化失败：{init_result[1]}')
+        except Exception as e:
+            logger.error(f'TransDhTask: 等待 init_wh_process 子进程就绪超时：{e}')
+
     @classmethod
     def instance(cls, *args, **kwargs):
         if not hasattr(TransDhTask, '_instance'):
@@ -1415,19 +1440,50 @@ class TransDhTask(object):
                 process_list = []
                 wh = 0
                 try:
-                    wh_output = self.init_wh_queue_output.get(timeout=10)
+                    # 循环获取队列数据，直到收到匹配当前 code 的结果或超时
+                    # 原因：init_wh_process 是类级别单例，队列中可能残留之前任务的结果
+                    start_time = time.time()
+                    wh_output = None
+                    while time.time() - start_time < 30:  # 总超时 30 秒
+                        try:
+                            wh_output = self.init_wh_queue_output.get(timeout=1.0)
+                            print(f'[{code}] 收到 wh 结果：{wh_output}')
 
-                    print(wh_output)
+                            # 检查是否匹配当前任务
+                            if wh_output[0] == code:
+                                wh = wh_output[1]
+                                logger.info(f'[{code}] 人脸检测成功：wh={wh}, 多人脸={wh_output[2] if len(wh_output) > 2 else False}')
+                                break
+                            else:
+                                # 不匹配的结果丢弃，继续等待
+                                logger.warning(f'[{code}] 收到不匹配的结果：{wh_output[0]}，继续等待...')
+                        except Empty:
+                            continue
 
+                    # 检查是否超时
+                    if wh_output is None or (len(wh_output) > 0 and wh_output[0] != code):
+                        raise TimeoutError(f'[{code}] 人脸检测超时，未收到有效结果')
 
-                    if wh_output[0] == code:
-                        wh = wh_output[1]
-                    # if wh_output[2]:
-                    #     raise Exception('存在多人脸')
                 except Exception as e1:
+                    logger.error(f'[{code}] 人脸检测失败：{e1}')
                     print(traceback.format_exc())
-                    raise Exception(e1)
+                    raise Exception(f'人脸检测失败：{e1}')
                 logger.info(f'[{code}] -> wh: [{wh}]')
+
+                # 检查人脸检测是否成功
+                if wh == 0:
+                    error_msg = '未在驱动视频中检测到人脸，请检查视频文件是否包含清晰的人脸'
+                    logger.error(f'[{code}] {error_msg}')
+                    self.change_task_status(code, Status.error, 0, '', error_msg)
+                    # 清空队列中可能残留的数据
+                    try:
+                        while not self.init_wh_queue.empty():
+                            self.init_wh_queue.get_nowait()
+                        while not self.init_wh_queue_output.empty():
+                            self.init_wh_queue_output.get_nowait()
+                    except:
+                        pass
+                    return
 
                 print(f"超分控制{chaofen}")
 
