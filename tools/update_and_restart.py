@@ -9,6 +9,7 @@
 作为独立进程运行，确保主进程可以正常退出。
 """
 
+import platform
 import subprocess
 import sys
 import os
@@ -84,7 +85,8 @@ def execute_git_pull(app_dir: Path) -> tuple:
                 result = subprocess.run(
                     [path, "--version"],
                     capture_output=True,
-                    timeout=5
+                    timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
                 )
                 if result.returncode == 0:
                     git_exe = path
@@ -104,7 +106,8 @@ def execute_git_pull(app_dir: Path) -> tuple:
             cwd=str(app_dir),
             capture_output=True,
             text=True,
-            timeout=120
+            timeout=120,
+            creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
         )
 
         if result.returncode != 0:
