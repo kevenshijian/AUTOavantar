@@ -51,6 +51,21 @@ def run_silent(command, shell=True):
     return subprocess.run(command, shell=shell, creationflags=creationflags)
 
 
+def suppress_console_output():
+    """
+    抑制控制台输出，用于 multiprocessing 子进程
+
+    在 Windows 打包后的 EXE 中，子进程的 print() 可能导致控制台窗口弹出。
+    此函数将 sys.stdout 和 sys.stderr 重定向到 devnull。
+    """
+    if platform.system() == "Windows":
+        try:
+            sys.stdout = open(os.devnull, 'w', encoding='utf-8')
+            sys.stderr = open(os.devnull, 'w', encoding='utf-8')
+        except Exception:
+            pass
+
+
 class FaceSelectWrapper:
     def __init__(self, detector, target_face_index=0, last_center=None):
         """
@@ -135,6 +150,7 @@ def drivered_video_pingpong(code, drivered_queue, drivered_path, audio_wenet_fea
     This is an efficient, in-memory replacement for drivered_video_pn.
     【修改点2】增加了 chaofen_ctrl 参数
     """
+    suppress_console_output()  # 抑制控制台输出
     try:
         logger.info(f'[{code}]任务视频驱动队列启动 (Ping-Pong Mode) batch_size:{batch_size}, chaofen_ctrl:{chaofen_ctrl}')
 
@@ -361,6 +377,7 @@ def drivered_video(code, drivered_queue, drivered_path, audio_wenet_feature, bat
     """
     【修改点4】增加了 chaofen_ctrl 参数
     """
+    suppress_console_output()  # 抑制控制台输出
     try:
         logger.info(f'[{code}]任务视频驱动队列启动 batch_size:{batch_size}, len:{len(audio_wenet_feature)}, chaofen_ctrl:{chaofen_ctrl}')
         drivered_list = []
@@ -555,6 +572,7 @@ def audio_transfer(drivered_queue, output_imgs_queue, batch_size, terminate_even
         batch_size: 批处理大小
         terminate_event: 终止信号事件（可选）
     """
+    suppress_console_output()  # 抑制控制台输出
     output_resize = 1
     digital_human_model = DigitalHumanModel(GlobalConfig.instance().blend_dynamic, GlobalConfig.instance().chaofen_before, face_blur_detect=False)
     scrfd_detector = FaceDetect(cpu=False, model_path='face_detect_utils/resources/')
@@ -842,6 +860,7 @@ def audio_transfer(drivered_queue, output_imgs_queue, batch_size, terminate_even
 
 
 def write_video(output_imgs_queue, temp_dir, result_dir, work_id, audio_path, result_queue, width, height, fps, watermark_switch=0, digital_auth=0, output_path=None):
+    suppress_console_output()  # 抑制控制台输出
     output_mp4 = os.path.join(temp_dir, f'{work_id}-t.mp4')
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     # 支持自定义输出路径，避免额外的文件复制
@@ -983,6 +1002,7 @@ class FaceReverseThread(Linker):
 
 
 def write_video_chaofen(output_imgs_queue, temp_dir, result_dir, work_id, audio_path, result_queue, width, height, fps, watermark_switch=0, digital_auth=0, output_path=None):
+    suppress_console_output()  # 抑制控制台输出
     output_mp4 = os.path.join(temp_dir, f'{work_id}-t.mp4')
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     # 支持自定义输出路径，避免额外的文件复制
@@ -1103,6 +1123,7 @@ def init_wh_process(in_queue, out_queue, terminate_event=None):
         out_queue: 输出队列
         terminate_event: 终止信号事件（可选）
     """
+    suppress_console_output()  # 抑制控制台输出
     try:
         logger.info('>>> init_wh_process 开始加载模型...')
         s_model = time.time()
