@@ -5,6 +5,7 @@
 
 import logging
 import os
+import platform
 import subprocess
 import numpy as np
 from typing import Optional, Tuple
@@ -74,7 +75,7 @@ class AudioMixer:
                 output_path
             ]
             
-            subprocess.run(cmd, check=True, capture_output=True)
+            subprocess.run(cmd, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             # 替换原视频
             os.replace(output_path, video_path)
@@ -124,7 +125,7 @@ class AudioMixer:
                 output_path
             ]
             
-            subprocess.run(cmd, check=True, capture_output=True)
+            subprocess.run(cmd, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             # 替换原视频
             os.replace(output_path, video_path)

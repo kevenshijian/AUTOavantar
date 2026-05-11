@@ -5,6 +5,7 @@
 
 import logging
 import os
+import platform
 import time
 import uuid
 from typing import Dict, List, Optional, Any
@@ -171,7 +172,7 @@ class AudioProcessor:
         ]
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             if result.returncode == 0:
                 logger.info(f"从视频中提取音频成功：{audio_path}")
                 return audio_path
@@ -956,7 +957,7 @@ class AudioProcessor:
                 temp_merged_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             if os.path.exists(temp_concat_file):
                 os.remove(temp_concat_file)
@@ -1003,7 +1004,7 @@ class AudioProcessor:
                     output_path
                 ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             if os.path.exists(temp_merged_path):
                 os.remove(temp_merged_path)
@@ -1051,7 +1052,7 @@ class AudioProcessor:
                 silence_path
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             if result.returncode == 0 and os.path.exists(silence_path):
                 # 追踪生成的静音文件，供后续清理
                 if not hasattr(self, '_silence_files'):
@@ -1112,7 +1113,7 @@ class AudioProcessor:
                 output_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             # 清理临时文件
             if os.path.exists(concat_file):
@@ -1200,7 +1201,7 @@ class AudioProcessor:
                 temp_merged_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             if result.returncode != 0:
                 logger.error(f"合并音频段落失败: {result.stderr}")
@@ -1245,7 +1246,7 @@ class AudioProcessor:
                 output_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             # 清理临时文件
             if os.path.exists(temp_merged_path):
@@ -1468,7 +1469,7 @@ class AudioProcessor:
                 "-i", list_file, "-c", "copy", output_path
             ]
 
-            subprocess.run(cmd, check=True, capture_output=True)
+            subprocess.run(cmd, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             os.remove(list_file)
 
             logger.info(f"音频合并成功: {output_path}")
@@ -1506,7 +1507,7 @@ class AudioProcessor:
         ]
 
         try:
-            subprocess.run(cmd, check=True, capture_output=True)
+            subprocess.run(cmd, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             return output_path
         except Exception as e:
             logger.error(f"添加淡入淡出失败: {e}")

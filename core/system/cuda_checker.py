@@ -10,6 +10,8 @@ CUDA 驱动检测服务
 
 import logging
 import json
+import platform
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -231,12 +233,12 @@ class CUDAChecker:
 
         # 方法2: 通过 nvidia-smi 获取（需要系统 PATH）
         try:
-            import subprocess
             result = subprocess.run(
                 ['nvidia-smi', '--query-gpu=driver_version', '--format=csv,noheader'],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
             )
             if result.returncode == 0:
                 version = result.stdout.strip()

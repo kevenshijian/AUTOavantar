@@ -1353,6 +1353,8 @@ def a():
 class TransDhTask(object):
 
     def __init__(self, *args, **kwargs):
+        # 打包为 EXE 时需要调用 freeze_support()
+        multiprocessing.freeze_support()
         logger.info('TransDhTask init')
         set_start_method('spawn', force=True)
         self.run_lock = threading.Lock()

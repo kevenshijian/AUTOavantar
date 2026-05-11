@@ -9,6 +9,7 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 import os
+import platform
 import subprocess
 
 logger = logging.getLogger(__name__)
@@ -147,7 +148,8 @@ class VideoPreprocessor:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
             )
             if result.returncode == 0 and result.stdout.strip():
                 rotation = int(result.stdout.strip())

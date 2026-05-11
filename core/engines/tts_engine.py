@@ -37,6 +37,7 @@ IndexTTS 模型本身不支持原生语速调节。本引擎通过 ffmpeg 对参
 import gc
 import logging
 import os
+import platform
 import subprocess
 import sys
 from typing import Optional, Dict, Any, List
@@ -252,7 +253,8 @@ class TTSEngine:
                 cmd,
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
             )
             logger.info(f"音频速度调整完成: speed={speed}, 输出={temp_path}")
             return temp_path

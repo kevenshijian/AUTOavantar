@@ -5,6 +5,8 @@
 
 import logging
 import os
+import platform
+import subprocess
 import time
 import shutil
 from typing import Dict, List, Optional, Any
@@ -799,7 +801,7 @@ class VideoSynthesizer:
             ]
             
             logger.info(f"执行 ffprobe 获取音频时长: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             if result.returncode != 0:
                 stderr = result.stderr.decode('utf-8', errors='ignore')
@@ -882,7 +884,7 @@ class VideoSynthesizer:
             ]
         
         logger.info(f"执行 ffmpeg 处理场景视频: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True)
+        result = subprocess.run(cmd, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
         
         if result.returncode != 0:
             stderr = result.stderr.decode('utf-8', errors='ignore')
@@ -1387,7 +1389,7 @@ class VideoSynthesizer:
             ]
             
             logger.info(f"执行视频合并命令: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             # 清理临时文件
             if os.path.exists(list_file):
@@ -1457,7 +1459,7 @@ class VideoSynthesizer:
                 output_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             # 清理临时文件
             if os.path.exists(concat_file):
@@ -1488,7 +1490,7 @@ class VideoSynthesizer:
             "-i", list_file, "-c", "copy", output_path
         ]
 
-        subprocess.run(cmd, check=True, capture_output=True)
+        subprocess.run(cmd, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
         os.remove(list_file)
 
     def _extract_audio_from_video(self, video_path: str, output_audio_path: str) -> bool:
@@ -1516,7 +1518,7 @@ class VideoSynthesizer:
                 output_audio_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             if result.returncode == 0 and os.path.exists(output_audio_path):
                 logger.info(f"从视频中提取音频成功: {output_audio_path}")
@@ -1580,7 +1582,7 @@ class VideoSynthesizer:
             
             # 执行音频合并（如果需要）
             if left_audio_path and right_audio_path:
-                result = subprocess.run(cmd, capture_output=True)
+                result = subprocess.run(cmd, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
                 if result.returncode != 0:
                     stderr = result.stderr.decode('utf-8', errors='ignore')
                     logger.error(f"合并左右音频失败: {stderr}")
@@ -1602,7 +1604,7 @@ class VideoSynthesizer:
                 final_output
             ]
             
-            result = subprocess.run(cmd, capture_output=True)
+            result = subprocess.run(cmd, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             # 清理临时文件
             if os.path.exists(combined_audio):
@@ -1641,7 +1643,7 @@ class VideoSynthesizer:
             "ffmpeg", "-y", "-f", "concat", "-safe", "0",
             "-i", list_file, "-c", "copy", concat_audio
         ]
-        subprocess.run(cmd, check=True, capture_output=True)
+        subprocess.run(cmd, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
         os.remove(list_file)
 
         # 合并音频和视频
@@ -1650,7 +1652,7 @@ class VideoSynthesizer:
             "-c:v", "copy", "-c:a", "aac", "-strict", "experimental",
             output_path
         ]
-        subprocess.run(cmd, check=True, capture_output=True)
+        subprocess.run(cmd, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
 
         # 清理临时音频
         if os.path.exists(concat_audio):
@@ -1679,7 +1681,7 @@ class VideoSynthesizer:
                 video_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             if result.returncode != 0:
                 logger.error(f"ffprobe 执行失败: {result.stderr}")
@@ -1797,7 +1799,7 @@ class VideoSynthesizer:
             ]
             
             logger.info(f"执行视频标准化: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             if result.returncode == 0 and os.path.exists(output_path):
                 logger.info(f"视频标准化成功: {output_path}")
@@ -1850,7 +1852,7 @@ class VideoSynthesizer:
             ]
             
             logger.info(f"执行视频标准化（分辨率: {target_width}x{target_height}, 帧率: {target_fps}）: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             if result.returncode == 0 and os.path.exists(output_path):
                 logger.info(f"视频标准化成功: {output_path}")

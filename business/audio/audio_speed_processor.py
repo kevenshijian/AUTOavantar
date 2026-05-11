@@ -5,6 +5,7 @@
 
 import logging
 import os
+import platform
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -106,7 +107,7 @@ class AudioSpeedProcessor:
                 output_path
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
 
             if result.returncode == 0 and os.path.exists(output_path):
                 logger.info(f"音频语速调节成功: {output_path}")
@@ -191,7 +192,7 @@ class AudioSpeedProcessor:
                 output_path
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
 
             if result.returncode == 0 and os.path.exists(output_path):
                 logger.info(f"音频语速调节成功 (atempo): {output_path}")

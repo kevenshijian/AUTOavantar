@@ -6,6 +6,7 @@
 import os
 import logging
 import json
+import platform
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
@@ -340,7 +341,7 @@ async def extract_audio(request: ExtractAudioRequest):
             "-ar", "16000", "-ac", "1",
             "-y", audio_path
         ]
-        subprocess.run(cmd, capture_output=True, check=True)
+        subprocess.run(cmd, capture_output=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
 
         duration = 0.0
         probe_cmd = [
@@ -350,7 +351,7 @@ async def extract_audio(request: ExtractAudioRequest):
             audio_path
         ]
         try:
-            result = subprocess.run(probe_cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(probe_cmd, capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             duration = float(result.stdout.strip())
         except:
             pass

@@ -5,6 +5,7 @@
 
 import logging
 import os
+import platform
 import subprocess
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
@@ -237,7 +238,7 @@ class PostProcessor:
                 video_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             data = json.loads(result.stdout)
             
             video_stream = None
@@ -300,7 +301,7 @@ class PostProcessor:
             ]
             
             logger.info(f"标准化视频: {video_path} -> {output_path} ({target_width}x{target_height}@{target_fps}fps)")
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             if result.returncode != 0:
                 logger.error(f"视频标准化失败: {result.stderr}")
@@ -380,7 +381,7 @@ class PostProcessor:
                 ]
                 
                 logger.info(f"合并视频命令: {' '.join(cmd)}")
-                subprocess.run(cmd, check=True, capture_output=True)
+                subprocess.run(cmd, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
                 os.remove(list_file)
                 
                 logger.info(f"视频合并成功: {output_path}")
@@ -686,7 +687,7 @@ class PostProcessor:
 
             logger.info(f"添加字幕命令: {cmd_str}")
             try:
-                result = subprocess.run(cmd_str, check=True, capture_output=True, text=True, shell=True)
+                result = subprocess.run(cmd_str, check=True, capture_output=True, text=True, shell=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             except subprocess.CalledProcessError as e:
                 logger.error(f"ffmpeg 错误输出: {e.stderr}")
                 logger.error(f"ffmpeg 标准输出: {e.stdout}")
@@ -852,7 +853,7 @@ class PostProcessor:
                 ]
 
             logger.info(f"BGM 添加命令: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
 
             if result.returncode != 0:
                 logger.error(f"BGM 添加失败: {result.stderr}")
@@ -889,7 +890,7 @@ class PostProcessor:
                 '-of', 'default=noprint_wrappers=1:nokey=1',
                 media_path
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             return float(result.stdout.strip())
         except Exception as e:
             logger.error(f"获取媒体时长失败: {e}")
@@ -917,7 +918,7 @@ class PostProcessor:
                 "-q:v", "2",
                 reference_path
             ]
-            subprocess.run(cmd, check=True, capture_output=True)
+            subprocess.run(cmd, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
 
             if not os.path.exists(reference_path):
                 logger.error("从开场视频截取帧失败")
@@ -1014,7 +1015,7 @@ class PostProcessor:
             ]
 
             logger.info(f"封面帧插入命令: {' '.join(cmd)}")
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             logger.info(f"封面帧插入成功")
 
             os.replace(output_path, video_path)
@@ -1051,7 +1052,7 @@ class PostProcessor:
                 "-q:v", "2",
                 reference_path
             ]
-            subprocess.run(cmd, check=True, capture_output=True)
+            subprocess.run(cmd, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             if not os.path.exists(reference_path):
                 return None
@@ -1092,7 +1093,7 @@ class PostProcessor:
                 cover_path
             ]
             
-            subprocess.run(cmd, check=True, capture_output=True)
+            subprocess.run(cmd, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
             
             return cover_path if os.path.exists(cover_path) else None
             

@@ -10,6 +10,7 @@ import sqlite3
 import shutil
 import hashlib
 import uuid
+import platform
 import subprocess
 import time
 from typing import List, Optional, Dict, Any
@@ -2277,7 +2278,8 @@ class MaterialLibrary:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
             )
             if result.returncode == 0 and result.stdout.strip():
                 rotation = int(result.stdout.strip())
