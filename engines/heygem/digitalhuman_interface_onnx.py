@@ -10,6 +10,7 @@ import os
 import sys
 import onnxruntime as ort
 from y_utils.config import GlobalConfig
+from y_utils.logger import logger
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
@@ -66,15 +67,10 @@ class DigitalHumanModel:
         # 优先使用 FP16 模型（如果存在）
         if os.path.exists(onnx_model_path_fp16):
             onnx_model_path = onnx_model_path_fp16
-            print("="*70)
-            print("✓ 检测到 FP16 模型，将使用半精度优化（显存减半，速度提升）")
-            print("="*70)
+            logger.info("检测到 FP16 模型，将使用半精度优化（显存减半，速度提升）")
         elif os.path.exists(onnx_model_path_base):
             onnx_model_path = onnx_model_path_base
-            print("="*70)
-            print("ℹ 使用 FP32 模型")
-            print("💡 提示: 可以运行 'python export_fp16_onnx.py' 转换为 FP16 获得更好性能")
-            print("="*70)
+            logger.info("使用 FP32 模型")
         else:
             # 尝试使用未包装的版本
             onnx_model_path = self.opt.model_path.replace('.pth', '_fixed.onnx')
@@ -86,7 +82,7 @@ class DigitalHumanModel:
                     f"  2. python dinet_wrapper.py"
                 )
 
-        print(f"正在加载 ONNX 模型: {onnx_model_path}")
+        logger.info(f"正在加载 ONNX 模型: {onnx_model_path}")
 
         # 配置 session options
         sess_options = ort.SessionOptions()
@@ -112,9 +108,9 @@ class DigitalHumanModel:
         }
 
         if is_fp16:
-            print(f"✓ FP16 显存限制: {mem_limit // (1024**3)}GB")
+            logger.info(f"FP16 显存限制: {mem_limit // (1024**3)}GB")
         else:
-            print(f"✓ FP32 显存限制: {mem_limit // (1024**3)}GB")
+            logger.info(f"FP32 显存限制: {mem_limit // (1024**3)}GB")
 
         self.session = ort.InferenceSession(
             onnx_model_path,
@@ -133,22 +129,15 @@ class DigitalHumanModel:
         available_providers = self.session.get_providers()
         actual_provider = available_providers[0] if available_providers else "Unknown"
 
-        print("="*70)
-        print("[SUCCESS] ONNX 模型加载成功!")
-        print("="*70)
-        print(f"  模型路径: {onnx_model_path}")
-        print(f"  输入: {self.input_names}")
-        print(f"  输出: {self.output_names}")
-        print(f"  执行提供器: {actual_provider}")
-        print("="*70)
+        logger.info(f"ONNX 模型加载成功: {onnx_model_path}, 提供器: {actual_provider}")
 
         # 检测模型格式
         if 'audio_feature' in self.input_names and 'concat_images' in self.input_names:
             self.model_format = 'wrapped'  # 包装格式: netG(audio, concat)
-            print(f"  模型格式: 包装格式 (适配原始调用)")
+            logger.debug(f"模型格式: 包装格式 (适配原始调用)")
         elif 'source_image' in self.input_names and 'reference_image' in self.input_names:
             self.model_format = 'standard'  # 标准格式: netG(source, ref, audio)
-            print(f"  模型格式: 标准格式 (DINetV1)")
+            logger.debug(f"模型格式: 标准格式 (DINetV1)")
         else:
             raise ValueError(f"未知的模型输入格式: {self.input_names}")
 

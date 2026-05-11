@@ -91,7 +91,7 @@ class SCRFD:
             if cpu:
                 providers = ['CPUExecutionProvider']
             else:
-                print('检测人脸使用GPU')
+                # 检测人脸使用GPU（静默模式，不输出到控制台）
                 providers = ['CUDAExecutionProvider']
             self.session = onnxruntime.InferenceSession(self.model_file, None, providers=providers)
 
@@ -150,7 +150,8 @@ class SCRFD:
         input_size = kwargs.get('input_size', None)
         if input_size is not None:
             if self.input_size is not None:
-                print('warning: det_size is already set in scrfd model, ignore')
+                # det_size is already set in scrfd model, ignore (静默模式)
+                pass
             else:
                 self.input_size = input_size
 

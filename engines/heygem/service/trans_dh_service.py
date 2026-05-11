@@ -56,12 +56,23 @@ def suppress_console_output():
     抑制控制台输出，用于 multiprocessing 子进程
 
     在 Windows 打包后的 EXE 中，子进程的 print() 可能导致控制台窗口弹出。
-    此函数将 sys.stdout 和 sys.stderr 重定向到 devnull。
+    此函数将 sys.stdout 和 sys.stderr 重定向到 devnull，并禁用 logging 控制台输出。
     """
     if platform.system() == "Windows":
         try:
+            # 重定向 sys.stdout 和 sys.stderr
             sys.stdout = open(os.devnull, 'w', encoding='utf-8')
             sys.stderr = open(os.devnull, 'w', encoding='utf-8')
+
+            # 禁用 logging 的控制台输出
+            import logging
+            # 获取根 logger 并移除所有 handler
+            root_logger = logging.getLogger()
+            for handler in root_logger.handlers[:]:
+                if isinstance(handler, logging.StreamHandler):
+                    root_logger.removeHandler(handler)
+            # 添加一个 NullHandler
+            root_logger.addHandler(logging.NullHandler())
         except Exception:
             pass
 
