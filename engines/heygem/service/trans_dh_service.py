@@ -1,6 +1,7 @@
 import gc
 import multiprocessing
 import os
+import platform
 import subprocess
 import threading
 import time
@@ -33,6 +34,21 @@ from torch.cuda.amp import autocast
 import itertools
 
 # 【修改点1】移除了全局变量 need_chaofen_flag 和 get_firstface_frame
+
+
+def run_silent(command, shell=True):
+    """
+    静默执行命令，不弹出控制台窗口
+
+    Args:
+        command: 要执行的命令（字符串或列表）
+        shell: 是否使用 shell 执行
+
+    Returns:
+        subprocess.CompletedProcess 结果
+    """
+    creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+    return subprocess.run(command, shell=shell, creationflags=creationflags)
 
 
 class FaceSelectWrapper:
@@ -869,7 +885,7 @@ def write_video(output_imgs_queue, temp_dir, result_dir, work_id, audio_path, re
         else:
             command = f'ffmpeg -loglevel warning -y -i {audio_path} -i {output_mp4} -c:a aac -c:v libx264 -crf 15 -strict -2 {result_path}'
             logger.info(f'command:{command}')
-        subprocess.call(command, shell=True)
+        run_silent(command)
         print('###### write over')
         result_queue.put([True, result_path])
     except Exception as e:
@@ -881,11 +897,11 @@ def write_video(output_imgs_queue, temp_dir, result_dir, work_id, audio_path, re
 def save_video_ffmpeg(input_video_path, output_video_path):
     audio_file_path = input_video_path.replace('.mp4', '.aac')
     if not os.path.exists(audio_file_path):
-        os.system(f'ffmpeg -y -hide_banner -loglevel error -i "{str(input_video_path)}" -f wav -vn  "{str(audio_file_path)}"')
+        run_silent(f'ffmpeg -y -hide_banner -loglevel error -i "{str(input_video_path)}" -f wav -vn  "{str(audio_file_path)}"')
     if os.path.exists(audio_file_path):
         os.rename(output_video_path, output_video_path.replace('.mp4', '_no_audio.mp4'))
         start = time.time()
-        os.system(f'ffmpeg -y -hide_banner -loglevel error  -i "{str(output_video_path.replace(".mp4", "_no_audio.mp4"))}" -i "{str(audio_file_path)}" -c:v libx264 "{str(output_video_path)}"')
+        run_silent(f'ffmpeg -y -hide_banner -loglevel error  -i "{str(output_video_path.replace(".mp4", "_no_audio.mp4"))}" -i "{str(audio_file_path)}" -c:v libx264 "{str(output_video_path)}"')
         print('add audio time cost', time.time() - start)
         os.remove(output_video_path.replace('.mp4', '_no_audio.mp4'))
         os.remove(audio_file_path)
@@ -1029,7 +1045,7 @@ def write_video_chaofen(output_imgs_queue, temp_dir, result_dir, work_id, audio_
         else:
             command = f'ffmpeg -y -i {audio_path} -i {output_mp4} -c:a aac -c:v libx264 -crf 15 -strict -2 {result_path}'
             logger.info(f'command:{command}')
-        subprocess.call(command, shell=True)
+        run_silent(command)
         print('###### write over')
         result_queue.put([True, result_path])
     except Exception as e:
@@ -1319,14 +1335,14 @@ def format_video_audio(code, video_path, audio_path, fourcc):
     video_format = os.path.join(GlobalConfig.instance().temp_dir, code + '_format.mp4')
     ffmpeg_command = ffmpeg_command % (video_path, video_format)
     logger.info(f'[{code}] -> ffmpeg video: {ffmpeg_command}')
-    os.system(ffmpeg_command)
+    run_silent(ffmpeg_command)
     if not os.path.exists(video_format):
         raise Exception('format video error')
     ffmpeg_command = 'ffmpeg -loglevel warning -i %s -ac 1 -ar 16000 -acodec pcm_s16le -y  %s'
     audio_format = os.path.join(GlobalConfig.instance().temp_dir, code + '_format.wav')
     ffmpeg_command = ffmpeg_command % (audio_path, audio_format)
     logger.info(f'[{code}] -> ffmpeg audio: {ffmpeg_command}')
-    os.system(ffmpeg_command)
+    run_silent(ffmpeg_command)
     if not os.path.exists(audio_format):
         raise Exception('format audio error')
     return (video_format, audio_format)
