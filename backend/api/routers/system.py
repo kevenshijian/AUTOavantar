@@ -21,9 +21,9 @@ logger = logging.getLogger("autoavantar-api")
 
 router = APIRouter()
 
-# 版本检测配置
-VERSION_URL = "https://raw.githubusercontent.com/Eikwang/AUTOavantar/main/VERSION"
-UPDATE_URL = "https://github.com/Eikwang/AUTOavantar/releases"
+# 版本检测配置 - 使用 Gitee 仓库
+VERSION_URL = "https://gitee.com/astink/autoavantar/raw/master/VERSION"
+UPDATE_URL = "https://gitee.com/astink/autoavantar"
 
 
 def get_app_dir() -> Path:
@@ -43,11 +43,11 @@ def read_local_version() -> str:
 
 
 def fetch_remote_version() -> Optional[str]:
-    """从 GitHub 获取远程版本号"""
+    """从 Gitee 获取远程版本号"""
     try:
         req = urllib.request.Request(VERSION_URL, method='GET')
         req.add_header('User-Agent', 'AUTOavantar-Version-Check')
-        with urllib.request.urlopen(req, timeout=5) as response:
+        with urllib.request.urlopen(req, timeout=10) as response:
             return response.read().decode('utf-8').strip()
     except Exception as e:
         logger.debug(f"获取远程版本失败: {e}")

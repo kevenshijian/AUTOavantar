@@ -7,6 +7,8 @@
 
 该脚本由 desktop_launcher.py 在用户选择更新后启动，
 作为独立进程运行，确保主进程可以正常退出。
+
+更新源: Gitee 仓库 (https://gitee.com/astink/autoavantar.git)
 """
 
 import platform
@@ -61,15 +63,15 @@ def wait_for_process_exit(process_name: str, timeout: int = 30):
 
 def execute_git_pull(app_dir: Path) -> tuple:
     """
-    执行 git pull
+    执行 git pull (从 Gitee 仓库更新)
 
     Returns:
         (success, message)
     """
-    # 尝试多种 git 路径
+    # 优先使用 py310 中的 git，然后尝试系统 git
     git_paths = [
+        app_dir / "py310" / "git" / "bin" / "git.exe",
         app_dir / "py310" / "git-cmd.exe",
-        app_dir / "py310" / "bin" / "git.exe",
         "git"
     ]
 
@@ -100,9 +102,40 @@ def execute_git_pull(app_dir: Path) -> tuple:
     log(f"使用 git: {git_exe}")
 
     try:
-        # 执行 git pull
+        # 检查是否已配置 Gitee 远程仓库
         result = subprocess.run(
-            [git_exe, "pull"],
+            [git_exe, "remote", "-v"],
+            cwd=str(app_dir),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        )
+
+        # 如果没有配置 remote 或 remote 不是 Gitee，则添加
+        if "gitee.com/astink/autoavantar" not in result.stdout:
+            log("配置 Gitee 远程仓库...")
+            # 移除可能存在的 origin
+            subprocess.run(
+                [git_exe, "remote", "remove", "origin"],
+                cwd=str(app_dir),
+                capture_output=True,
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            )
+            # 添加 Gitee origin
+            subprocess.run(
+                [git_exe, "remote", "add", "origin", "https://gitee.com/astink/autoavantar.git"],
+                cwd=str(app_dir),
+                capture_output=True,
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            )
+
+        # 执行 git fetch
+        log("从 Gitee 获取更新...")
+        result = subprocess.run(
+            [git_exe, "fetch", "origin", "master"],
             cwd=str(app_dir),
             capture_output=True,
             text=True,
@@ -111,14 +144,28 @@ def execute_git_pull(app_dir: Path) -> tuple:
         )
 
         if result.returncode != 0:
-            return False, f"git pull 失败: {result.stderr}"
+            return False, f"git fetch 失败: {result.stderr}"
 
-        return True, result.stdout
+        # 执行 git reset --hard 强制更新到远程版本
+        log("应用更新...")
+        result = subprocess.run(
+            [git_exe, "reset", "--hard", "origin/master"],
+            cwd=str(app_dir),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        )
+
+        if result.returncode != 0:
+            return False, f"git reset 失败: {result.stderr}"
+
+        return True, "更新成功"
 
     except subprocess.TimeoutExpired:
-        return False, "git pull 超时"
+        return False, "git 操作超时"
     except Exception as e:
-        return False, f"git pull 异常: {e}"
+        return False, f"git 操作异常: {e}"
 
 
 def restart_application(app_dir: Path):

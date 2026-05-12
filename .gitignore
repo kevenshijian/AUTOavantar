@@ -110,5 +110,7 @@ release/
 打包exe.bat
 分发打包.bat
 启动系统.bat
+分发更新.bat
 start_system.py
 otherLog/
+release-update5*/
