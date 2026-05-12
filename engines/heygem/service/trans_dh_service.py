@@ -3,12 +3,29 @@ import multiprocessing
 import os
 import platform
 import subprocess
+import sys
 import threading
 import time
 import traceback
 from enum import Enum
 from multiprocessing import Process, set_start_method
 from queue import Empty, Full
+
+# ============================================================================
+# 【备用修复】在模块导入时立即隐藏控制台窗口
+# 当 multiprocessing 使用 spawn 方法启动子进程时，子进程会重新导入此模块。
+# 此时控制台窗口已经被创建，我们需要在模块导入的最早期立即隐藏它。
+# 这是备用方案，主要的修复在后端入口点应用 monkey patch
+# ============================================================================
+if platform.system() == "Windows":
+    try:
+        import ctypes
+        console_window = ctypes.windll.kernel32.GetConsoleWindow()
+        if console_window:
+            ctypes.windll.user32.ShowWindow(console_window, 0)
+            ctypes.windll.kernel32.FreeConsole()
+    except Exception:
+        pass
 import cv2
 import librosa
 import numpy as np
@@ -51,12 +68,35 @@ def run_silent(command, shell=True):
     return subprocess.run(command, shell=shell, creationflags=creationflags)
 
 
+def set_console_window_hidden():
+    """
+    设置当前进程的控制台窗口隐藏状态
+
+    在 Windows 上，此函数会隐藏当前进程的控制台窗口并释放控制台句柄。
+    这应该在父进程中调用，以便子进程继承隐藏状态。
+    """
+    if platform.system() == "Windows":
+        try:
+            import ctypes
+            # 获取控制台窗口句柄
+            console_window = ctypes.windll.kernel32.GetConsoleWindow()
+            if console_window:
+                # SW_HIDE = 0, 隐藏窗口
+                ctypes.windll.user32.ShowWindow(console_window, 0)
+                # 释放控制台，彻底断开与控制台的连接
+                ctypes.windll.kernel32.FreeConsole()
+        except Exception:
+            pass
+
+
 def suppress_console_output():
     """
     抑制控制台输出，用于 multiprocessing 子进程
 
     在 Windows 打包后的 EXE 中，子进程的 print() 可能导致控制台窗口弹出。
     此函数将 sys.stdout 和 sys.stderr 重定向到 devnull，并禁用 logging 控制台输出。
+
+    注意：控制台窗口的隐藏已在模块导入时完成，此函数仅处理输出重定向。
     """
     if platform.system() == "Windows":
         try:
@@ -349,7 +389,7 @@ def get_blend_imgs(batch_size, audio_data, face_data_dict, blend_dynamic, params
         torch.cuda.empty_cache()
         # 每10个batch输出一次进度，减少I/O开销
         if idx % 10 == 0 or idx * batch_size >= len(audio_data) - batch_size:
-            print(f'\r{idx * batch_size + 1}/{len(audio_data)}', end='')
+            logger.debug(f'进度: {idx * batch_size + 1}/{len(audio_data)}')
 
         if idx < len(audio_data) // batch_size:
             start_index = idx * batch_size
@@ -395,7 +435,7 @@ def drivered_video(code, drivered_queue, drivered_path, audio_wenet_feature, bat
         wenet_feature_list = []
         count_f = 0
         current_idx = 0
-        print('in template video function')
+        logger.debug('in template video function')
         cap = cv2.VideoCapture(drivered_path)
         logger.info('drivered_video >>>>>>>>>>>>>>>>>>>> 开始循环')
         while cap.isOpened():
@@ -863,7 +903,7 @@ def audio_transfer(drivered_queue, output_imgs_queue, batch_size, terminate_even
             # logger.info(f'audio_transfer >>>>>>>>>>> 发送完成数据大小:{len(output_imgs)}, frameId:{frameId}, cost:{time.time() - s_au}s')  # 移除日志提升性能
             torch.cuda.empty_cache()
         except Exception as e:
-            print(traceback.format_exc())
+            logger.error(traceback.format_exc())
             output_imgs_queue.put([False, f'数字人处理失败，失败原因:[{e.__str__()}]', ''])
             time.sleep(1)
             torch.cuda.empty_cache()
@@ -916,7 +956,7 @@ def write_video(output_imgs_queue, temp_dir, result_dir, work_id, audio_path, re
             command = f'ffmpeg -loglevel warning -y -i {audio_path} -i {output_mp4} -c:a aac -c:v libx264 -crf 15 -strict -2 {result_path}'
             logger.info(f'command:{command}')
         run_silent(command)
-        print('###### write over')
+        logger.debug('write over')
         result_queue.put([True, result_path])
     except Exception as e:
         logger.error(f'[{work_id}]视频帧队列处理异常结束，异常原因:[{e.__str__()}]')
@@ -932,7 +972,7 @@ def save_video_ffmpeg(input_video_path, output_video_path):
         os.rename(output_video_path, output_video_path.replace('.mp4', '_no_audio.mp4'))
         start = time.time()
         run_silent(f'ffmpeg -y -hide_banner -loglevel error  -i "{str(output_video_path.replace(".mp4", "_no_audio.mp4"))}" -i "{str(audio_file_path)}" -c:v libx264 "{str(output_video_path)}"')
-        print('add audio time cost', time.time() - start)
+        logger.debug(f'add audio time cost: {time.time() - start:.2f}s')
         os.remove(output_video_path.replace('.mp4', '_no_audio.mp4'))
         os.remove(audio_file_path)
     return output_video_path
@@ -1077,7 +1117,7 @@ def write_video_chaofen(output_imgs_queue, temp_dir, result_dir, work_id, audio_
             command = f'ffmpeg -y -i {audio_path} -i {output_mp4} -c:a aac -c:v libx264 -crf 15 -strict -2 {result_path}'
             logger.info(f'command:{command}')
         run_silent(command)
-        print('###### write over')
+        logger.debug('write over')
         result_queue.put([True, result_path])
     except Exception as e:
         logger.error(f'[{work_id}]视频帧队列处理异常结束，异常原因:[{e.__str__()}]')
@@ -1090,7 +1130,7 @@ def video_synthesis(output_imgs_queue):
     st = time.time()
     while output_imgs_queue.empty():
         et = time.time()
-        print('表情迁移首次出现耗时======================:', et - st)
+        logger.debug(f'表情迁移首次出现耗时: {et - st:.2f}s')
         output_imgs = output_imgs_queue.get()
         for img in output_imgs:
             time.sleep(0.03125)
@@ -1100,6 +1140,10 @@ def video_synthesis(output_imgs_queue):
 
 
 def hy_fun(wenet_model, audio_path, drivered_path, output_dir, work_id):
+    # 【关键修复】在创建子进程之前隐藏父进程的控制台窗口
+    # 这样子进程会继承父进程的隐藏状态，避免窗口闪烁
+    set_console_window_hidden()
+
     # 增大队列大小，避免长音频导致阻塞
     drivered_queue = multiprocessing.Queue(50)
     output_imgs_queue = multiprocessing.Queue(50)
@@ -1111,7 +1155,7 @@ def hy_fun(wenet_model, audio_path, drivered_path, output_dir, work_id):
     process_list.append(Process(target=write_video, args=(output_imgs_queue, output_dir, output_dir, work_id, audio_path, result_queue)))
     [p.start() for p in process_list]
     [p.join() for p in process_list]
-    print('主进程结束')
+    logger.debug('主进程结束')
     try:
         result_path = result_queue.get(timeout=10)
         return (0, result_path)
@@ -1193,7 +1237,7 @@ def init_wh_process(in_queue, out_queue, terminate_event=None):
             if len(queue_data) > 2:
                 target_face_id = int(queue_data[2])
 
-            print("target_face_id",target_face_id)
+            logger.debug(f"target_face_id: {target_face_id}")
 
             s = time.time()
             wh_list = []
@@ -1259,7 +1303,7 @@ def init_wh_process(in_queue, out_queue, terminate_event=None):
             torch.cuda.empty_cache()
             out_queue.put([code, wh, has_multi_face])
         except Exception as e:
-            print(traceback.format_exc())
+            logger.error(f'init_wh 异常: {traceback.format_exc()}')
             out_queue.put([f'init_wh，失败原因:[{e.args}]', '', False])
             torch.cuda.empty_cache()
 
@@ -1278,7 +1322,7 @@ def init_wh(code, drivered_path, target_face_id=0):
     #     print(str(e))
     #     target_face_id = 0
 
-    print("target_face_id",target_face_id)
+    logger.debug(f"target_face_id: {target_face_id}")
 
     s = time.time()
     face_detector = FaceDetect(cpu=False, model_path='face_detect_utils/resources/')
@@ -1405,6 +1449,11 @@ class TransDhTask(object):
         multiprocessing.freeze_support()
         logger.info('TransDhTask init')
         set_start_method('spawn', force=True)
+
+        # 【关键修复】在创建子进程之前隐藏父进程的控制台窗口
+        # 这样子进程会继承父进程的隐藏状态，避免窗口闪烁
+        set_console_window_hidden()
+
         self.run_lock = threading.Lock()
         self.task_dic = {}
         self.run_flag = False
@@ -1470,7 +1519,7 @@ class TransDhTask(object):
                     _video_url, _audio_url = format_video_audio(code, _tmp_video_path, _tmp_audio_path, fourcc)
                     logger.info(f'[{code}] -> 预处理耗时:{time.time() - s1}s')
                 except Exception as e:
-                    traceback.print_exc()
+                    logger.error(traceback.format_exc())
                     logger.error(f'[{code}]预处理失败，异常信息:[{e.__str__()}]')
                     raise CustomError(f'[{code}]预处理失败，异常信息:[{e.__str__()}]')
                 if not (os.path.exists(_video_url) and os.path.exists(_audio_url)):
@@ -1478,12 +1527,12 @@ class TransDhTask(object):
                 self.change_task_status(code, Status.run, 10, '', '文件下载完成')
                 self.init_wh_queue.put([code, _video_url, target_face_id])
                 try:
-                    print(f'>>> 777   {fps}')
+                    logger.debug(f'fps: {fps}')
                     s = time.time()
                     audio_wenet_feature = get_aud_feat1(_audio_url, fps=fps, wenet_model=self.wenet_model)
                     logger.info(f'[{code}] -> get_aud_feat1 cost:{time.time() - s}s')
                 except Exception as e:
-                    traceback.print_exc()
+                    logger.error(traceback.format_exc())
                     logger.error(f'[{code}]音频特征提取失败，异常信息:[{e.__str__()}]')
                     raise CustomError(f'[{code}]音频特征提取失败，异常信息:[{e.__str__()}]')
                 self.change_task_status(code, Status.run, 20, '', '音频特征提取完成')
@@ -1497,7 +1546,7 @@ class TransDhTask(object):
                     while time.time() - start_time < 30:  # 总超时 30 秒
                         try:
                             wh_output = self.init_wh_queue_output.get(timeout=1.0)
-                            print(f'[{code}] 收到 wh 结果：{wh_output}')
+                            logger.debug(f'[{code}] 收到 wh 结果：{wh_output}')
 
                             # 检查是否匹配当前任务
                             if wh_output[0] == code:
@@ -1516,7 +1565,7 @@ class TransDhTask(object):
 
                 except Exception as e1:
                     logger.error(f'[{code}] 人脸检测失败：{e1}')
-                    print(traceback.format_exc())
+                    logger.error(traceback.format_exc())
                     raise Exception(f'人脸检测失败：{e1}')
                 logger.info(f'[{code}] -> wh: [{wh}]')
 
@@ -1535,7 +1584,7 @@ class TransDhTask(object):
                         pass
                     return
 
-                print(f"超分控制{chaofen}")
+                logger.debug(f"超分控制: {chaofen}")
 
                 # 【修改点10】参数透传，传入 chaofen 参数（转为int）
                 chaofen_ctrl_val = int(chaofen)
@@ -1545,14 +1594,16 @@ class TransDhTask(object):
                     logger.info(f'[{code}] -> Starting process with Ping-Pong video logic, batch_size={task_batch_size}')
                     process_list.append(Process(target=drivered_video_pingpong,
                                                 args=(code, self.drivered_queue, _video_url, audio_wenet_feature,
-                                                      task_batch_size, wh, chaofen_ctrl_val, target_face_id), daemon=True))
+                                                      task_batch_size, wh, chaofen_ctrl_val, target_face_id),
+                                                daemon=True))
                 else:
                     # Use the original sequential video logic
                     logger.info(f'[{code}] -> Starting process with sequential video logic, batch_size={task_batch_size}')
                     process_list.append(Process(target=drivered_video,
                                                 args=(code, self.drivered_queue, _video_url, audio_wenet_feature,
-                                                      task_batch_size, wh, chaofen_ctrl_val, target_face_id), daemon=True))
-                
+                                                      task_batch_size, wh, chaofen_ctrl_val, target_face_id),
+                                                daemon=True))
+
                 # 注意：这里的 chaofen 判断是用于后处理（write_video_chaofen），和上面的 chaofen_ctrl_val (预处理) 是两个阶段的控制
                 # 假设 chaofen 参数同时控制两个阶段，或者通过 GlobalConfig 配置
                 if chaofen == 1:
@@ -1564,7 +1615,7 @@ class TransDhTask(object):
                 try:
                     try:
                         state, result_path = self.result_queue.get(timeout=10)
-                        print(f'>>>>>>>>>>>>>>1111 {state} {result_path}')
+                        logger.debug(f'任务结果: state={state}, path={result_path}')
                         if state:
                             self.change_task_status(code, Status.run, 90, result_path, '视频处理完成')
                             _remote_file = os.path.join(GlobalConfig.instance().result_dir, f'{code}.mp4')
@@ -1580,7 +1631,7 @@ class TransDhTask(object):
                     del audio_wenet_feature
                     gc.collect()
             except Exception as e:
-                traceback.print_exc()
+                logger.error(traceback.format_exc())
                 logger.error(f'[{code}]任务执行失败，异常信息:[{e.__str__()}]')
                 self.change_task_status(code, Status.error, 0, '', e.__str__())
         finally:
@@ -1601,7 +1652,7 @@ class TransDhTask(object):
             else:
                 _tmp_audio_path = audio_url
         except Exception as e:
-            traceback.print_exc()
+            logger.error(traceback.format_exc())
             raise CustomError(f'[{code}]音频下载失败，异常信息:[{e.__str__()}]')
         try:
             if video_url.startswith('http:') or video_url.startswith('https:'):
@@ -1610,9 +1661,9 @@ class TransDhTask(object):
             else:
                 _tmp_video_path = video_url
         except Exception as e:
-            traceback.print_exc()
+            logger.error(traceback.format_exc())
             raise CustomError(f'[{code}]视频下载失败，异常信息:[{e.__str__()}]')
-        print('--------------------> download cost:', time.time() - s_pre)
+        logger.debug(f'download cost: {time.time() - s_pre:.2f}s')
         return (_tmp_audio_path, _tmp_video_path)
 
     def change_task_status(self, code, status, progress, result, msg=''):
@@ -1622,7 +1673,7 @@ class TransDhTask(object):
                 if code in self.task_dic:
                     self.task_dic[code] = (status, progress, result, msg)
             except Exception as e:
-                traceback.print_exc()
+                logger.error(traceback.format_exc())
                 logger.error(f'[{code}]修改任务状态异常，异常信息:[{e.__str__()}]')
         finally:
             self.run_lock.release()
@@ -1745,4 +1796,4 @@ if __name__ == '__main__':
     wenet_model = load_ppg_model('wenet/examples/aishell/aidata/conf/train_conformer_multi_cn.yaml', 'wenet/examples/aishell/aidata/exp/conformer/wenetmodel.pt', 'cuda')
     st = time.time()
     result = hy_fun(wenet_model, 'test_data/audio/driver_add_valume.wav', './landmark2face_wy/checkpoints/hy/1.mp4', './result', 1001)
-    print(result, time.time() - st)
+    logger.info(f'result: {result}, cost: {time.time() - st:.2f}s')

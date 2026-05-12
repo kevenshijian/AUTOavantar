@@ -10,6 +10,23 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+# ============================================================================
+# 【关键修复】在导入任何其他模块之前，先应用 multiprocessing patch
+# 这会阻止 Windows 上 multiprocessing 子进程创建控制台窗口
+# 必须在导入任何使用 multiprocessing 的模块之前执行
+# ============================================================================
+base_dir = Path(__file__).parent.parent.parent
+if str(base_dir) not in sys.path:
+    sys.path.insert(0, str(base_dir))
+
+# 应用 multiprocessing CREATE_NO_WINDOW patch
+try:
+    from core.utils.multiprocessing_no_window import patch_multiprocessing
+    patch_multiprocessing()
+except Exception as e:
+    # 如果 patch 失败，继续运行（会有控制台窗口弹出的问题）
+    pass
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -20,11 +37,6 @@ from api.services.database import init_database, close_database
 from api.services.workflow_service import init_workflow_service, shutdown_workflow_service
 from api.routers.websocket import manager
 from config.settings import settings
-
-# 添加项目路径到 sys.path，确保可以导入 core 模块
-base_dir = Path(__file__).parent.parent.parent
-if str(base_dir) not in sys.path:
-    sys.path.insert(0, str(base_dir))
 
 from core.config.logging_config import setup_logging
 
