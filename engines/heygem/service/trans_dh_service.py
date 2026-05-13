@@ -1509,8 +1509,18 @@ class TransDhTask(object):
         # 使用传入的 batch_size 或默认值
         task_batch_size = batch_size if batch_size is not None else self.batch_size
         logger.info(f'[{code}] -> batch_size: {task_batch_size}')
+
+        # 辅助函数：检查是否应该取消
+        def should_cancel():
+            return self._terminate_event is not None and self._terminate_event.is_set()
+
         try:
             try:
+                # 检查取消
+                if should_cancel():
+                    logger.info(f'[{code}] 任务在开始前被取消')
+                    return
+
                 self.change_task_status(code, Status.run, 0, '', '')
                 try:
                     s1 = time.time()
@@ -1524,6 +1534,12 @@ class TransDhTask(object):
                     raise CustomError(f'[{code}]预处理失败，异常信息:[{e.__str__()}]')
                 if not (os.path.exists(_video_url) and os.path.exists(_audio_url)):
                     raise Exception('视频入参或音频入参下载处理异常')
+
+                # 检查取消
+                if should_cancel():
+                    logger.info(f'[{code}] 任务在预处理后被取消')
+                    return
+
                 self.change_task_status(code, Status.run, 10, '', '文件下载完成')
                 self.init_wh_queue.put([code, _video_url, target_face_id])
                 try:
@@ -1535,6 +1551,12 @@ class TransDhTask(object):
                     logger.error(traceback.format_exc())
                     logger.error(f'[{code}]音频特征提取失败，异常信息:[{e.__str__()}]')
                     raise CustomError(f'[{code}]音频特征提取失败，异常信息:[{e.__str__()}]')
+
+                # 检查取消
+                if should_cancel():
+                    logger.info(f'[{code}] 任务在音频特征提取后被取消')
+                    return
+
                 self.change_task_status(code, Status.run, 20, '', '音频特征提取完成')
                 process_list = []
                 wh = 0
@@ -1544,6 +1566,11 @@ class TransDhTask(object):
                     start_time = time.time()
                     wh_output = None
                     while time.time() - start_time < 30:  # 总超时 30 秒
+                        # 检查取消
+                        if should_cancel():
+                            logger.info(f'[{code}] 任务在人脸检测等待中被取消')
+                            return
+
                         try:
                             wh_output = self.init_wh_queue_output.get(timeout=1.0)
                             logger.debug(f'[{code}] 收到 wh 结果：{wh_output}')
@@ -1584,6 +1611,11 @@ class TransDhTask(object):
                         pass
                     return
 
+                # 检查取消
+                if should_cancel():
+                    logger.info(f'[{code}] 任务在视频生成前被取消')
+                    return
+
                 logger.debug(f"超分控制: {chaofen}")
 
                 # 【修改点10】参数透传，传入 chaofen 参数（转为int）
@@ -1611,7 +1643,29 @@ class TransDhTask(object):
                 else:
                     process_list.append(Process(target=write_video, args=(self.output_imgs_queue, GlobalConfig.instance().temp_dir, GlobalConfig.instance().result_dir, code, _tmp_audio_path, self.result_queue, width, height, fps, watermark_switch, digital_auth, output_path), daemon=True))
                 [p.start() for p in process_list]
-                [p.join() for p in process_list]
+
+                # 使用带超时的 join，以便检查取消信号
+                for p in process_list:
+                    while p.is_alive():
+                        p.join(timeout=0.5)
+                        if should_cancel():
+                            logger.info(f'[{code}] 任务在视频生成中被取消，终止子进程')
+                            for proc in process_list:
+                                if proc.is_alive():
+                                    proc.terminate()
+                            # 等待子进程终止
+                            for proc in process_list:
+                                proc.join(timeout=2.0)
+                            # 清空队列防止残留数据影响后续任务
+                            try:
+                                while not self.drivered_queue.empty():
+                                    self.drivered_queue.get_nowait()
+                                while not self.output_imgs_queue.empty():
+                                    self.output_imgs_queue.get_nowait()
+                            except:
+                                pass
+                            return
+
                 try:
                     try:
                         state, result_path = self.result_queue.get(timeout=10)

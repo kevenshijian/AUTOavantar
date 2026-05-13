@@ -1402,10 +1402,11 @@ class WorkflowService:
         if current_stage and ('视频生成' in current_stage or '视频合成' in current_stage or 'heygem' in current_stage.lower()):
             logger.info(f"任务 {task_id} 在视频生成阶段被取消，准备卸载 HeyGem 引擎")
             try:
-                from core.gpu_manager import get_gpu_resource_manager
-                gpu_manager = get_gpu_resource_manager()
+                from core.engines.gpu_manager import get_gpu_manager, EngineType
+                gpu_manager = get_gpu_manager()
                 if gpu_manager:
-                    heygem_engine = gpu_manager.get_engine("heygem_engine")
+                    # 获取并卸载 HeyGem 引擎
+                    heygem_engine = gpu_manager.get_engine(EngineType.HEYGEM)
                     if heygem_engine and heygem_engine.is_loaded:
                         heygem_engine.unload()
                         logger.info(f"任务 {task_id} 取消时 HeyGem 引擎已卸载")
@@ -1413,6 +1414,17 @@ class WorkflowService:
                     logger.warning(f"任务 {task_id} 取消时无法获取 GPUResourceManager")
             except Exception as e:
                 logger.error(f"任务 {task_id} 取消时卸载 HeyGem 引擎失败: {e}")
+                # 备用方案：直接尝试清理 TransDhTask 单例
+                try:
+                    import sys
+                    # 检查 TransDhTask 是否已导入
+                    if 'engines.heygem.service.trans_dh_service' in sys.modules:
+                        from engines.heygem.service.trans_dh_service import TransDhTask
+                        if hasattr(TransDhTask, '_instance') and TransDhTask._instance is not None:
+                            logger.info(f"任务 {task_id} 尝试直接清理 TransDhTask 单例")
+                            TransDhTask._instance.cleanup()
+                except Exception as e2:
+                    logger.error(f"任务 {task_id} 备用清理失败: {e2}")
 
         # 同步取消调度器中的任务状态
         try:

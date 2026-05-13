@@ -87,6 +87,11 @@ class GPUResourceManager:
                 del self._engines[engine_type]
                 logger.info(f"引擎已注销: {engine_type.value}")
 
+    def get_engine(self, engine_type: EngineType) -> Optional[Any]:
+        """获取已注册的引擎实例"""
+        with self._engine_lock:
+            return self._engines.get(engine_type)
+
     def acquire(self, engine_type: EngineType, timeout: float = 30.0) -> bool:
         """
         获取 GPU 使用权
