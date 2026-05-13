@@ -65,9 +65,6 @@ temp/
 tmp/
 py310/
 tf_download/
-voicel/checkpoints/
-voicel/indextts/
-voicel/outputs/
 *.mp4
 *.wav
 *.mp3
