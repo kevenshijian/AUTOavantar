@@ -1411,8 +1411,8 @@ class WorkflowService:
         need_unload = low_memory_mode or ultra_low_memory
         current_stage = getattr(task, 'current_stage', '')
 
-        # 调试日志：显示实际的 current_stage 值
-        logger.info(f"任务 {task_id} 取消时 current_stage={current_stage}, low_memory_mode={low_memory_mode}, ultra_low_memory={ultra_low_memory}, need_unload={need_unload}")
+        # 调试日志：显示实际的 current_stage 值（仅 debug 级别，避免生产环境泄露配置信息）
+        logger.debug(f"任务 {task_id} 取消时 current_stage={current_stage}, low_memory_mode={low_memory_mode}, ultra_low_memory={ultra_low_memory}, need_unload={need_unload}")
 
         if need_unload:
             logger.info(f"任务 {task_id} 被取消，低显存模式或超低显存模式开启，准备卸载引擎")

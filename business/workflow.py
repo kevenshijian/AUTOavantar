@@ -590,12 +590,14 @@ class DigitalHumanWorkflow:
                 if self.tts_engine and hasattr(self.tts_engine, 'set_progress_callback'):
                     # 创建一个适配器，将 gr_progress 格式转换为 progress_callback 格式
                     # 注意：_set_gr_progress 使用 desc 参数名，所以这里用 **kwargs 兼容
+                    # 显式捕获 progress_callback 的当前值，避免闭包捕获外部变量导致的问题
+                    _captured_callback = progress_callback
                     def tts_progress_adapter(progress_value, desc=None, **kwargs):
-                        if progress_callback:
+                        if _captured_callback:
                             # progress_value 是 0.0-1.0 的值，转换为 0-100
                             progress = 10 + progress_value * 35  # 音频阶段占 10-45%
                             description = desc or kwargs.get('description', '')
-                            progress_callback(progress, description)
+                            _captured_callback(progress, description)
 
                     self.tts_engine.set_progress_callback(tts_progress_adapter)
 

@@ -92,13 +92,13 @@ class IndexTTS2:
         self.use_torch_compile = use_torch_compile
         self.ultra_low_memory = ultra_low_memory
 
-        # 超低显存模式：跟踪模型加载状态
+        # 超低显存模式：跟踪模型加载状态（统一使用 _loaded 后缀）
         self._semantic_model_loaded = False
         self._semantic_codec_loaded = False
         self._s2mel_loaded = False
         self._campplus_loaded = False
 
-        # CPU 卸载模式：跟踪模型是否在 CPU 上
+        # CPU 卸载模式：跟踪模型是否在 CPU 上（统一使用 _on_cpu 后缀）
         self._semantic_model_on_cpu = False
         self._campplus_on_cpu = False
 
@@ -163,10 +163,12 @@ class IndexTTS2:
             self.semantic_codec = semantic_codec.to(self.device)
             self.semantic_codec.eval()
             self._semantic_codec_loaded = True
+            self._semantic_codec_ckpt = semantic_code_ckpt  # 保存路径供后续使用
             print('>> semantic_codec weights restored from: {}'.format(semantic_code_ckpt))
         else:
             self.semantic_codec = None
-            self._semantic_codec_ckpt = None  # 将在加载时设置
+            # 预先下载并保存 checkpoint 路径，避免每次推理都重新下载
+            self._semantic_codec_ckpt = hf_hub_download("amphion/MaskGCT", filename="semantic_codec/model.safetensors")
             print(">> [Ultra-Low Memory] semantic_codec will be loaded on demand")
 
         # 超低显存模式：延迟加载 s2mel
@@ -327,6 +329,7 @@ class IndexTTS2:
             del self.semantic_model
             self.semantic_model = None
             self._semantic_model_loaded = False
+            self._semantic_model_on_cpu = False  # 重置 CPU 状态标志
             if self.semantic_mean is not None:
                 self.semantic_mean.cpu()
                 del self.semantic_mean
@@ -374,6 +377,7 @@ class IndexTTS2:
             del self.campplus_model
             self.campplus_model = None
             self._campplus_loaded = False
+            self._campplus_on_cpu = False  # 重置 CPU 状态标志
             print(">> [Ultra-Low Memory] campplus_model released")
 
     def _release_all_optional_models(self):
@@ -386,9 +390,7 @@ class IndexTTS2:
         self._release_semantic_models()
         self._release_s2mel()
         self._release_campplus()
-        gc.collect()
-        gc.collect()
-        gc.collect()
+        gc.collect()  # 单次调用即可清理所有待回收对象
         torch.cuda.empty_cache()
 
     def _offload_reference_models_to_cpu(self):
