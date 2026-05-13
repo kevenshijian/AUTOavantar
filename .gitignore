@@ -113,5 +113,5 @@ release/
 分发更新.bat
 start_system.py
 otherLog/
-release-update5*/
+release-update*/
 dist/

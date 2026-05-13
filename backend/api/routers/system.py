@@ -8,6 +8,7 @@ import logging
 import subprocess
 import urllib.request
 import urllib.error
+import os
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -201,20 +202,36 @@ async def trigger_update():
     """
     触发更新流程
 
-    创建更新标记文件，通知启动器执行更新
+    创建更新标记文件，并通知启动器执行更新
+    更新流程：
+    1. 创建 .update_pending 标记文件
+    2. 调用系统退出，让 desktop_launcher 检测标记并执行更新
     → AC-003: 触发更新流程
     """
+    import asyncio
+    import signal
+
     try:
         app_dir = get_app_dir()
         update_flag_file = app_dir / ".update_pending"
 
         # 创建更新标记
         update_flag_file.write_text("pending", encoding='utf-8')
-        logger.info("更新标记已创建")
+        logger.info("更新标记已创建，系统将在 3 秒后退出以执行更新")
+
+        # 异步延迟退出，给前端时间显示提示
+        async def delayed_exit():
+            await asyncio.sleep(3)
+            logger.info("系统退出，准备执行更新...")
+            # 发送 SIGTERM 信号退出进程
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        # 启动延迟退出任务
+        asyncio.create_task(delayed_exit())
 
         return UpdateResponse(
             success=True,
-            message="更新已启动，应用将自动退出"
+            message="更新已启动，系统将在 3 秒后自动退出"
         )
     except Exception as e:
         logger.error(f"触发更新失败: {e}")
