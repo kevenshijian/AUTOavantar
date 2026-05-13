@@ -19,7 +19,7 @@
   vec8: 0.0
   speed: 1.0
 开心:
-  vec1: 0.3
+  vec1: 0.6
   vec2: 0.0
   vec3: 0.0
   vec4: 0.0
@@ -29,18 +29,18 @@
   vec8: 0.0
   speed: 1.06
 高兴:
-  vec1: 0.2
+  vec1: 0.4
   vec2: 0.0
   vec3: 0.0
   vec4: 0.0
   vec5: 0.0
   vec6: 0.0
-  vec7: 0.1
+  vec7: 0.2
   vec8: 0.0
   speed: 1.06
 激动:
-  vec1: 0.3
-  vec2: 0.2
+  vec1: 0.6
+  vec2: 0.4
   vec3: 0.0
   vec4: 0.0
   vec5: 0.0
@@ -49,18 +49,18 @@
   vec8: 0.0
   speed: 1.02
 兴奋:
-  vec1: 0.2
+  vec1: 0.4
   vec2: 0.0
   vec3: 0.0
   vec4: 0.0
   vec5: 0.0
   vec6: 0.0
-  vec7: 0.3
+  vec7: 0.6
   vec8: 0.0
   speed: 1.05
 生气:
   vec1: 0.0
-  vec2: 0.3
+  vec2: 0.6
   vec3: 0.0
   vec4: 0.0
   vec5: 0.0
@@ -70,20 +70,20 @@
   speed: 1.04
 愤怒:
   vec1: 0.0
-  vec2: 0.3
+  vec2: 0.6
   vec3: 0.0
   vec4: 0.0
-  vec5: 0.2
+  vec5: 0.4
   vec6: 0.0
   vec7: 0.0
   vec8: 0.0
   speed: 1.03
 憎恨:
   vec1: 0.0
-  vec2: 0.2
+  vec2: 0.4
   vec3: 0.0
   vec4: 0.0
-  vec5: 0.4
+  vec5: 0.8
   vec6: 0.0
   vec7: 0.0
   vec8: 0.0
@@ -91,7 +91,7 @@
 难过:
   vec1: 0.0
   vec2: 0.0
-  vec3: 0.3
+  vec3: 0.6
   vec4: 0.0
   vec5: 0.0
   vec6: 0.0
@@ -101,30 +101,30 @@
 悲伤:
   vec1: 0.0
   vec2: 0.0
-  vec3: 0.3
+  vec3: 0.6
   vec4: 0.0
   vec5: 0.0
-  vec6: 0.2
+  vec6: 0.4
   vec7: 0.0
   vec8: 0.0
   speed: 0.94
 伤心:
   vec1: 0.0
   vec2: 0.0
-  vec3: 0.3
+  vec3: 0.6
   vec4: 0.0
   vec5: 0.0
-  vec6: 0.2
+  vec6: 0.4
   vec7: 0.0
   vec8: 0.0
   speed: 0.96
 忧伤:
   vec1: 0.0
   vec2: 0.0
-  vec3: 0.2
+  vec3: 0.4
   vec4: 0.0
   vec5: 0.0
-  vec6: 0.3
+  vec6: 0.6
   vec7: 0.0
   vec8: 0.0
   speed: 0.94
@@ -134,9 +134,9 @@
   vec3: 0.0
   vec4: 0.0
   vec5: 0.0
-  vec6: 0.3
+  vec6: 0.6
   vec7: 0.0
-  vec8: 0.2
+  vec8: 0.4
   speed: 0.98
 低落:
   vec1: 0.0
@@ -144,7 +144,7 @@
   vec3: 0.0
   vec4: 0.0
   vec5: 0.0
-  vec6: 0.3
+  vec6: 0.6
   vec7: 0.0
   vec8: 0.0
   speed: 0.96
@@ -152,7 +152,7 @@
   vec1: 0.0
   vec2: 0.0
   vec3: 0.0
-  vec4: 0.3
+  vec4: 0.6
   vec5: 0.0
   vec6: 0.0
   vec7: 0.0
@@ -162,9 +162,9 @@
   vec1: 0.0
   vec2: 0.0
   vec3: 0.0
-  vec4: 0.3
+  vec4: 0.6
   vec5: 0.0
-  vec6: 0.3
+  vec6: 0.6
   vec7: 0.0
   vec8: 0.0
   speed: 0.98
@@ -172,10 +172,10 @@
   vec1: 0.0
   vec2: 0.0
   vec3: 0.0
-  vec4: 0.4
+  vec4: 0.8
   vec5: 0.0
   vec6: 0.0
-  vec7: 0.2
+  vec7: 0.4
   vec8: 0.0
   speed: 1.03
 惊喜:
@@ -185,7 +185,7 @@
   vec4: 0.0
   vec5: 0.0
   vec6: 0.0
-  vec7: 0.4
+  vec7: 0.8
   vec8: 0.0
   speed: 1.05
 厌恶:
@@ -193,7 +193,7 @@
   vec2: 0.0
   vec3: 0.0
   vec4: 0.0
-  vec5: 0.3
+  vec5: 0.6
   vec6: 0.0
   vec7: 0.0
   vec8: 0.0
@@ -203,8 +203,8 @@
   vec2: 0.0
   vec3: 0.0
   vec4: 0.0
-  vec5: 0.3
-  vec6: 0.2
+  vec5: 0.6
+  vec6: 0.4
   vec7: 0.0
   vec8: 0.0
   speed: 0.98
@@ -216,7 +216,7 @@
   vec5: 0.2
   vec6: 0.0
   vec7: 0.0
-  vec8: 0.2
+  vec8: 0.4
   speed: 1.0
 冷静:
   vec1: 0.0
@@ -224,9 +224,9 @@
   vec3: 0.0
   vec4: 0.0
   vec5: 0.0
-  vec6: 0.0
+  vec6: 0.2
   vec7: 0.0
-  vec8: 0.3
+  vec8: 0.6
   speed: 0.98
 环境展示:
   vec1: 0.1
@@ -275,7 +275,7 @@
   vec4: 0.0
   vec5: 0.0
   vec6: 0.0
-  vec7: 0.1
+  vec7: 0.2
   vec8: 0.0
   speed: 1.0
 旁白视角:
