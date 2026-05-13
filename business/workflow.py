@@ -586,11 +586,29 @@ class DigitalHumanWorkflow:
                         description = build_stage_description("audio", completed, total, tag)
                         progress_callback(progress, description)
 
+                # 设置 TTSEngine 的进度回调（用于超低显存模式下的模型加载进度）
+                if self.tts_engine and hasattr(self.tts_engine, 'set_progress_callback'):
+                    # 创建一个适配器，将 gr_progress 格式转换为 progress_callback 格式
+                    # 注意：_set_gr_progress 使用 desc 参数名，所以这里用 **kwargs 兼容
+                    def tts_progress_adapter(progress_value, desc=None, **kwargs):
+                        if progress_callback:
+                            # progress_value 是 0.0-1.0 的值，转换为 0-100
+                            progress = 10 + progress_value * 35  # 音频阶段占 10-45%
+                            description = desc or kwargs.get('description', '')
+                            progress_callback(progress, description)
+
+                    self.tts_engine.set_progress_callback(tts_progress_adapter)
+
                 audio_results = self.audio_processor.synthesize_all(
                     task, config,
                     cancel_callback=cancel_callback,
                     progress_callback=audio_progress_callback
                 )
+
+                # 清除 TTSEngine 的进度回调
+                if self.tts_engine and hasattr(self.tts_engine, 'set_progress_callback'):
+                    self.tts_engine.set_progress_callback(None)
+
                 failed_audio = [r for r in audio_results if r.status == "failed"]
                 if failed_audio:
                     logger.warning(f"部分段落合成失败：{len(failed_audio)}/{len(audio_results)}")
@@ -1675,7 +1693,8 @@ def create_workflow(
     llm_api_key: str = "",
     output_dir: str = "output",
     qwen_api_key: Optional[str] = None,
-    low_memory_mode: bool = False
+    low_memory_mode: bool = False,
+    ultra_low_memory: bool = False
 ) -> DigitalHumanWorkflow:
     """创建工作流的便捷函数（引擎模式）
 
@@ -1687,13 +1706,17 @@ def create_workflow(
         output_dir: 输出目录
         qwen_api_key: Qwen API 密钥
         low_memory_mode: 是否启用低显存模式
+        ultra_low_memory: 是否启用超低显存模式
 
     Returns:
         DigitalHumanWorkflow 实例
     """
     # 如果未提供引擎，从配置创建
     if tts_engine is None or heygem_engine is None:
-        engines = create_engines_from_config(low_memory_mode=low_memory_mode)
+        engines = create_engines_from_config(
+            low_memory_mode=low_memory_mode,
+            ultra_low_memory=ultra_low_memory
+        )
         tts_engine = tts_engine or engines.get("tts_engine")
         heygem_engine = heygem_engine or engines.get("heygem_engine")
 

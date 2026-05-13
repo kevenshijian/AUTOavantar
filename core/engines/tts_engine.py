@@ -65,7 +65,8 @@ class TTSEngine:
         use_cuda_kernel: bool = False,
         use_torch_compile: bool = False,
         managed: bool = True,
-        preload_model: bool = True
+        preload_model: bool = True,
+        ultra_low_memory: bool = False
     ):
         """
         初始化 TTSEngine
@@ -79,6 +80,9 @@ class TTSEngine:
             use_torch_compile: 是否使用 torch.compile 优化
             managed: 是否由 GPUResourceManager 管理
             preload_model: 是否在初始化时预加载模型（低显存模式时设为 False）
+            ultra_low_memory: 是否启用超低显存模式（延迟加载 + 推理后释放）
+                             当 True 时，只加载基础模型，其他模型按需加载
+                             默认 False 以保持现有行为
         """
         self.cfg_path = cfg_path
         self.model_dir = model_dir
@@ -88,11 +92,13 @@ class TTSEngine:
         self.use_torch_compile = use_torch_compile
         self.managed = managed
         self._preload_model = preload_model
+        self._ultra_low_memory = ultra_low_memory
 
         # 内部状态
         self._model: Optional[Any] = None
         self._is_loaded: bool = False
         self._emotion_mapping: Dict[str, List[float]] = {}
+        self._progress_callback: Optional[callable] = None  # 进度回调函数
 
         # 设置 HF 环境变量（离线模式、缓存路径）
         self._setup_hf_environment()
@@ -101,7 +107,7 @@ class TTSEngine:
         if self.managed:
             self._register_to_gpu_manager()
 
-        logger.info(f"TTSEngine 初始化: cfg_path={cfg_path}, model_dir={model_dir}, use_fp16={use_fp16}, preload_model={preload_model}")
+        logger.info(f"TTSEngine 初始化: cfg_path={cfg_path}, model_dir={model_dir}, use_fp16={use_fp16}, preload_model={preload_model}, ultra_low_memory={ultra_low_memory}")
 
         # 如果 preload_model=True，立即加载模型
         if preload_model:
@@ -306,7 +312,8 @@ class TTSEngine:
                 use_fp16=self.use_fp16,
                 device=self.device,
                 use_cuda_kernel=self.use_cuda_kernel,
-                use_torch_compile=self.use_torch_compile
+                use_torch_compile=self.use_torch_compile,
+                ultra_low_memory=self._ultra_low_memory
             )
 
             # 加载情绪映射
@@ -379,6 +386,21 @@ class TTSEngine:
             logger.error(f"卸载模型失败: {e}")
             return False
 
+    def set_progress_callback(self, callback: Optional[callable]):
+        """
+        设置进度回调函数
+
+        Args:
+            callback: 进度回调函数，签名为 (progress: float, description: str)
+                     progress: 0.0-1.0 的进度值
+                     description: 进度描述文本
+        """
+        self._progress_callback = callback
+        # 如果模型已加载，同步设置模型的 gr_progress
+        if self._model is not None:
+            self._model.gr_progress = callback
+        logger.debug(f"进度回调已设置: {callback is not None}")
+
     def synthesize(
         self,
         text: str,
@@ -411,6 +433,10 @@ class TTSEngine:
 
         if not os.path.exists(voice_path):
             raise FileNotFoundError(f"参考音频不存在: {voice_path}")
+
+        # 设置模型的进度回调（用于超低显存模式下的模型加载进度）
+        if self._model is not None and self._progress_callback is not None:
+            self._model.gr_progress = self._progress_callback
 
         # 用于跟踪临时文件，确保在函数结束时清理
         temp_voice_path = None
@@ -572,7 +598,8 @@ def create_tts_engine(
     model_dir: str = "checkpoints",
     use_fp16: bool = True,
     managed: bool = True,
-    preload_model: bool = True
+    preload_model: bool = True,
+    ultra_low_memory: bool = False
 ) -> TTSEngine:
     """
     创建 TTSEngine 的便捷函数
@@ -583,6 +610,7 @@ def create_tts_engine(
         use_fp16: 是否使用 FP16
         managed: 是否由 GPUResourceManager 管理
         preload_model: 是否在初始化时预加载模型
+        ultra_low_memory: 是否启用超低显存模式
 
     Returns:
         TTSEngine 实例
@@ -592,5 +620,6 @@ def create_tts_engine(
         model_dir=model_dir,
         use_fp16=use_fp16,
         managed=managed,
-        preload_model=preload_model
+        preload_model=preload_model,
+        ultra_low_memory=ultra_low_memory
     )

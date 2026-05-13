@@ -45,7 +45,8 @@ import torch.nn.functional as F
 class IndexTTS2:
     def __init__(
             self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_fp16=False, device=None,
-            use_cuda_kernel=None,use_deepspeed=False, use_accel=False, use_torch_compile=False
+            use_cuda_kernel=None,use_deepspeed=False, use_accel=False, use_torch_compile=False,
+            ultra_low_memory=False
     ):
         """
         Args:
@@ -57,6 +58,9 @@ class IndexTTS2:
             use_deepspeed (bool): whether to use DeepSpeed or not.
             use_accel (bool): whether to use acceleration engine for GPT2 or not.
             use_torch_compile (bool): whether to use torch.compile for optimization or not.
+            ultra_low_memory (bool): whether to use ultra-low memory mode (delayed loading + post-inference release).
+                                     When True, only loads gpt and bigvgan at init, other models are loaded on demand.
+                                     Default is False to preserve existing behavior.
         """
         if device is not None:
             self.device = device
@@ -86,6 +90,17 @@ class IndexTTS2:
         self.stop_mel_token = self.cfg.gpt.stop_mel_token
         self.use_accel = use_accel
         self.use_torch_compile = use_torch_compile
+        self.ultra_low_memory = ultra_low_memory
+
+        # 超低显存模式：跟踪模型加载状态
+        self._semantic_model_loaded = False
+        self._semantic_codec_loaded = False
+        self._s2mel_loaded = False
+        self._campplus_loaded = False
+
+        # CPU 卸载模式：跟踪模型是否在 CPU 上
+        self._semantic_model_on_cpu = False
+        self._campplus_on_cpu = False
 
         # 延迟加载 QwenEmotion（只在需要时加载）
         self._qwen_emo_path = os.path.join(self.model_dir, self.cfg.qwen_emo_path)
@@ -122,51 +137,81 @@ class IndexTTS2:
                 self.use_cuda_kernel = False
 
         self.extract_features = SeamlessM4TFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
-        self.semantic_model, self.semantic_mean, self.semantic_std = build_semantic_model(
-            os.path.join(self.model_dir, self.cfg.w2v_stat))
-        self.semantic_model = self.semantic_model.to(self.device)
-        self.semantic_model.eval()
-        self.semantic_mean = self.semantic_mean.to(self.device)
-        self.semantic_std = self.semantic_std.to(self.device)
 
-        semantic_codec = build_semantic_codec(self.cfg.semantic_codec)
-        semantic_code_ckpt = hf_hub_download("amphion/MaskGCT", filename="semantic_codec/model.safetensors")
-        safetensors.torch.load_model(semantic_codec, semantic_code_ckpt)
-        self.semantic_codec = semantic_codec.to(self.device)
-        self.semantic_codec.eval()
-        print('>> semantic_codec weights restored from: {}'.format(semantic_code_ckpt))
+        # 超低显存模式：延迟加载 semantic_model
+        if not self.ultra_low_memory:
+            self.semantic_model, self.semantic_mean, self.semantic_std = build_semantic_model(
+                os.path.join(self.model_dir, self.cfg.w2v_stat))
+            self.semantic_model = self.semantic_model.to(self.device)
+            self.semantic_model.eval()
+            self.semantic_mean = self.semantic_mean.to(self.device)
+            self.semantic_std = self.semantic_std.to(self.device)
+            self._semantic_model_loaded = True
+        else:
+            # 延迟加载：只保存路径，不加载模型
+            self._w2v_stat_path = os.path.join(self.model_dir, self.cfg.w2v_stat)
+            self.semantic_model = None
+            self.semantic_mean = None
+            self.semantic_std = None
+            print(">> [Ultra-Low Memory] semantic_model will be loaded on demand")
 
-        s2mel_path = os.path.join(self.model_dir, self.cfg.s2mel_checkpoint)
-        s2mel = MyModel(self.cfg.s2mel, use_gpt_latent=True)
-        s2mel, _, _, _ = load_checkpoint2(
-            s2mel,
-            None,
-            s2mel_path,
-            load_only_params=True,
-            ignore_modules=[],
-            is_distributed=False,
-        )
-        self.s2mel = s2mel.to(self.device)
-        self.s2mel.models['cfm'].estimator.setup_caches(max_batch_size=1, max_seq_length=8192)
-        
-        # Enable torch.compile optimization if requested
-        if self.use_torch_compile:
-            print(">> Enabling torch.compile optimization")
-            self.s2mel.enable_torch_compile()
-            print(">> torch.compile optimization enabled successfully")
-        
-        self.s2mel.eval()
-        print(">> s2mel weights restored from:", s2mel_path)
+        # 超低显存模式：延迟加载 semantic_codec
+        if not self.ultra_low_memory:
+            semantic_codec = build_semantic_codec(self.cfg.semantic_codec)
+            semantic_code_ckpt = hf_hub_download("amphion/MaskGCT", filename="semantic_codec/model.safetensors")
+            safetensors.torch.load_model(semantic_codec, semantic_code_ckpt)
+            self.semantic_codec = semantic_codec.to(self.device)
+            self.semantic_codec.eval()
+            self._semantic_codec_loaded = True
+            print('>> semantic_codec weights restored from: {}'.format(semantic_code_ckpt))
+        else:
+            self.semantic_codec = None
+            self._semantic_codec_ckpt = None  # 将在加载时设置
+            print(">> [Ultra-Low Memory] semantic_codec will be loaded on demand")
 
-        # load campplus_model
-        campplus_ckpt_path = hf_hub_download(
-            "funasr/campplus", filename="campplus_cn_common.bin"
-        )
-        campplus_model = CAMPPlus(feat_dim=80, embedding_size=192)
-        campplus_model.load_state_dict(torch.load(campplus_ckpt_path, map_location="cpu"))
-        self.campplus_model = campplus_model.to(self.device)
-        self.campplus_model.eval()
-        print(">> campplus_model weights restored from:", campplus_ckpt_path)
+        # 超低显存模式：延迟加载 s2mel
+        if not self.ultra_low_memory:
+            s2mel_path = os.path.join(self.model_dir, self.cfg.s2mel_checkpoint)
+            s2mel = MyModel(self.cfg.s2mel, use_gpt_latent=True)
+            s2mel, _, _, _ = load_checkpoint2(
+                s2mel,
+                None,
+                s2mel_path,
+                load_only_params=True,
+                ignore_modules=[],
+                is_distributed=False,
+            )
+            self.s2mel = s2mel.to(self.device)
+            self.s2mel.models['cfm'].estimator.setup_caches(max_batch_size=1, max_seq_length=8192)
+
+            # Enable torch.compile optimization if requested
+            if self.use_torch_compile:
+                print(">> Enabling torch.compile optimization")
+                self.s2mel.enable_torch_compile()
+                print(">> torch.compile optimization enabled successfully")
+
+            self.s2mel.eval()
+            self._s2mel_loaded = True
+            print(">> s2mel weights restored from:", s2mel_path)
+        else:
+            self.s2mel = None
+            self._s2mel_path = os.path.join(self.model_dir, self.cfg.s2mel_checkpoint)
+            print(">> [Ultra-Low Memory] s2mel will be loaded on demand")
+
+        # 超低显存模式：延迟加载 campplus_model
+        if not self.ultra_low_memory:
+            campplus_ckpt_path = hf_hub_download(
+                "funasr/campplus", filename="campplus_cn_common.bin"
+            )
+            campplus_model = CAMPPlus(feat_dim=80, embedding_size=192)
+            campplus_model.load_state_dict(torch.load(campplus_ckpt_path, map_location="cpu"))
+            self.campplus_model = campplus_model.to(self.device)
+            self.campplus_model.eval()
+            self._campplus_loaded = True
+            print(">> campplus_model weights restored from:", campplus_ckpt_path)
+        else:
+            self.campplus_model = None
+            print(">> [Ultra-Low Memory] campplus_model will be loaded on demand")
 
         bigvgan_name = self.cfg.vocoder.name
         self.bigvgan = bigvgan.BigVGAN.from_pretrained(bigvgan_name, use_cuda_kernel=self.use_cuda_kernel)
@@ -216,6 +261,231 @@ class IndexTTS2:
         # 进度引用显示（可选）
         self.gr_progress = None
         self.model_version = self.cfg.version if hasattr(self.cfg, "version") else None
+
+    def _ensure_models_loaded_for_inference(self):
+        """
+        确保推理所需的模型已加载（超低显存模式）
+
+        AC-032: 推理时按需加载
+        在 ultra_low_memory 模式下，此方法在推理前调用，
+        自动加载推理必需的模型（semantic_codec、s2mel）。
+
+        注意：semantic_model 和 campplus_model 不在此处加载，
+        它们只在参考音频处理时按需加载（通过 _ensure_reference_models_on_gpu）。
+        """
+        if not self.ultra_low_memory:
+            return  # 非超低显存模式，模型已在初始化时加载
+
+        # 加载 semantic_codec（推理必需）
+        if not self._semantic_codec_loaded:
+            print(">> [Ultra-Low Memory] Loading semantic_codec...")
+            semantic_codec = build_semantic_codec(self.cfg.semantic_codec)
+            semantic_code_ckpt = hf_hub_download("amphion/MaskGCT", filename="semantic_codec/model.safetensors")
+            safetensors.torch.load_model(semantic_codec, semantic_code_ckpt)
+            self.semantic_codec = semantic_codec.to(self.device)
+            self.semantic_codec.eval()
+            self._semantic_codec_loaded = True
+            print(">> [Ultra-Low Memory] semantic_codec loaded")
+
+        # 加载 s2mel（推理必需）
+        if not self._s2mel_loaded:
+            print(">> [Ultra-Low Memory] Loading s2mel...")
+            s2mel = MyModel(self.cfg.s2mel, use_gpt_latent=True)
+            s2mel, _, _, _ = load_checkpoint2(
+                s2mel,
+                None,
+                self._s2mel_path,
+                load_only_params=True,
+                ignore_modules=[],
+                is_distributed=False,
+            )
+            self.s2mel = s2mel.to(self.device)
+            self.s2mel.models['cfm'].estimator.setup_caches(max_batch_size=1, max_seq_length=8192)
+
+            if self.use_torch_compile:
+                print(">> Enabling torch.compile optimization")
+                self.s2mel.enable_torch_compile()
+
+            self.s2mel.eval()
+            self._s2mel_loaded = True
+            print(">> [Ultra-Low Memory] s2mel loaded")
+
+        # 注意：semantic_model 和 campplus_model 不在此处加载
+        # 它们通过 _ensure_reference_models_on_gpu() 在参考音频处理时按需加载
+
+    def _release_semantic_models(self):
+        """
+        释放 semantic_model 和 semantic_codec（超低显存模式）
+
+        AC-033: 推理后释放策略
+        """
+        if not self.ultra_low_memory:
+            return  # 非超低显存模式，不释放
+
+        if self._semantic_model_loaded and self.semantic_model is not None:
+            self.semantic_model.cpu()
+            del self.semantic_model
+            self.semantic_model = None
+            self._semantic_model_loaded = False
+            if self.semantic_mean is not None:
+                self.semantic_mean.cpu()
+                del self.semantic_mean
+                self.semantic_mean = None
+            if self.semantic_std is not None:
+                self.semantic_std.cpu()
+                del self.semantic_std
+                self.semantic_std = None
+            print(">> [Ultra-Low Memory] semantic_model released")
+
+        if self._semantic_codec_loaded and self.semantic_codec is not None:
+            self.semantic_codec.cpu()
+            del self.semantic_codec
+            self.semantic_codec = None
+            self._semantic_codec_loaded = False
+            print(">> [Ultra-Low Memory] semantic_codec released")
+
+    def _release_s2mel(self):
+        """
+        释放 s2mel 模型（超低显存模式）
+
+        AC-033: 推理后释放策略
+        """
+        if not self.ultra_low_memory:
+            return
+
+        if self._s2mel_loaded and self.s2mel is not None:
+            self.s2mel.cpu()
+            del self.s2mel
+            self.s2mel = None
+            self._s2mel_loaded = False
+            print(">> [Ultra-Low Memory] s2mel released")
+
+    def _release_campplus(self):
+        """
+        释放 campplus_model（超低显存模式）
+
+        AC-033: 推理后释放策略
+        """
+        if not self.ultra_low_memory:
+            return
+
+        if self._campplus_loaded and self.campplus_model is not None:
+            self.campplus_model.cpu()
+            del self.campplus_model
+            self.campplus_model = None
+            self._campplus_loaded = False
+            print(">> [Ultra-Low Memory] campplus_model released")
+
+    def _release_all_optional_models(self):
+        """
+        释放所有可选模型（超低显存模式）
+
+        在推理完成后调用，释放 semantic_model、semantic_codec、s2mel、campplus_model。
+        保留 gpt 和 bigvgan 用于后续推理。
+        """
+        self._release_semantic_models()
+        self._release_s2mel()
+        self._release_campplus()
+        gc.collect()
+        gc.collect()
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    def _offload_reference_models_to_cpu(self):
+        """
+        将参考音频处理模型移至 CPU（CPU 卸载策略）
+
+        在参考音频处理完成后调用，将 semantic_model 和 campplus_model 移至 CPU。
+        这些模型仅在参考音频改变时需要，处理完成后可以卸载以节省显存。
+        下次推理时，如果参考音频改变，会自动重新加载到 GPU。
+
+        预估显存节省：~550-900MB
+        """
+        if not self.ultra_low_memory:
+            return  # 非超低显存模式，不执行卸载
+
+        # 将 semantic_model 移至 CPU
+        if self._semantic_model_loaded and self.semantic_model is not None and not self._semantic_model_on_cpu:
+            try:
+                self.semantic_model = self.semantic_model.to('cpu')
+                if self.semantic_mean is not None:
+                    self.semantic_mean = self.semantic_mean.to('cpu')
+                if self.semantic_std is not None:
+                    self.semantic_std = self.semantic_std.to('cpu')
+                self._semantic_model_on_cpu = True
+                torch.cuda.empty_cache()
+                print(">> [CPU Offload] semantic_model moved to CPU")
+            except Exception as e:
+                print(f">> [CPU Offload] Failed to move semantic_model to CPU: {e}")
+
+        # 将 campplus_model 移至 CPU
+        if self._campplus_loaded and self.campplus_model is not None and not self._campplus_on_cpu:
+            try:
+                self.campplus_model = self.campplus_model.to('cpu')
+                self._campplus_on_cpu = True
+                torch.cuda.empty_cache()
+                print(">> [CPU Offload] campplus_model moved to CPU")
+            except Exception as e:
+                print(f">> [CPU Offload] Failed to move campplus_model to CPU: {e}")
+
+    def _ensure_reference_models_on_gpu(self):
+        """
+        确保参考音频处理模型在 GPU 上（CPU 卸载策略）
+
+        在参考音频处理前调用，检查 semantic_model 和 campplus_model 是否在 CPU 上，
+        如果是则重新移至 GPU。如果模型未加载，则先加载到 GPU。
+        """
+        if not self.ultra_low_memory:
+            return  # 非超低显存模式，模型始终在 GPU 上
+
+        # 确保 semantic_model 已加载并在 GPU 上
+        if not self._semantic_model_loaded:
+            # 模型未加载，先加载到 GPU
+            print(">> [Ultra-Low Memory] Loading semantic_model for reference processing...")
+            self.semantic_model, self.semantic_mean, self.semantic_std = build_semantic_model(
+                self._w2v_stat_path)
+            self.semantic_model = self.semantic_model.to(self.device)
+            self.semantic_model.eval()
+            self.semantic_mean = self.semantic_mean.to(self.device)
+            self.semantic_std = self.semantic_std.to(self.device)
+            self._semantic_model_loaded = True
+            self._semantic_model_on_cpu = False
+            print(">> [Ultra-Low Memory] semantic_model loaded to GPU")
+        elif self._semantic_model_on_cpu and self.semantic_model is not None:
+            # 模型在 CPU 上，移回 GPU
+            try:
+                self.semantic_model = self.semantic_model.to(self.device)
+                if self.semantic_mean is not None:
+                    self.semantic_mean = self.semantic_mean.to(self.device)
+                if self.semantic_std is not None:
+                    self.semantic_std = self.semantic_std.to(self.device)
+                self._semantic_model_on_cpu = False
+                print(">> [CPU Offload] semantic_model moved back to GPU")
+            except Exception as e:
+                print(f">> [CPU Offload] Failed to move semantic_model to GPU: {e}")
+
+        # 确保 campplus_model 已加载并在 GPU 上
+        if not self._campplus_loaded:
+            # 模型未加载，先加载到 GPU
+            print(">> [Ultra-Low Memory] Loading campplus_model for reference processing...")
+            campplus_ckpt_path = hf_hub_download(
+                "funasr/campplus", filename="campplus_cn_common.bin"
+            )
+            campplus_model = CAMPPlus(feat_dim=80, embedding_size=192)
+            campplus_model.load_state_dict(torch.load(campplus_ckpt_path, map_location="cpu"))
+            self.campplus_model = campplus_model.to(self.device)
+            self.campplus_model.eval()
+            self._campplus_loaded = True
+            self._campplus_on_cpu = False
+            print(">> [Ultra-Low Memory] campplus_model loaded to GPU")
+        elif self._campplus_on_cpu and self.campplus_model is not None:
+            # 模型在 CPU 上，移回 GPU
+            try:
+                self.campplus_model = self.campplus_model.to(self.device)
+                self._campplus_on_cpu = False
+                print(">> [CPU Offload] campplus_model moved back to GPU")
+            except Exception as e:
+                print(f">> [CPU Offload] Failed to move campplus_model to GPU: {e}")
 
     @torch.no_grad()
     def get_emb(self, input_features, attention_mask):
@@ -393,6 +663,10 @@ class IndexTTS2:
               **generation_kwargs):
         print(">> starting inference...")
         self._set_gr_progress(0, "starting inference...")
+
+        # 超低显存模式：确保推理所需模型已加载
+        self._ensure_models_loaded_for_inference()
+
         if verbose:
             print(f"origin text:{text}, spk_audio_prompt:{spk_audio_prompt}, "
                   f"emo_audio_prompt:{emo_audio_prompt}, emo_alpha:{emo_alpha}, "
@@ -449,6 +723,9 @@ class IndexTTS2:
 
         # 如果参考音频改变了，才需要重新生成, 提升速度
         if self.cache_spk_cond is None or self.cache_spk_audio_prompt != spk_audio_prompt:
+            # CPU 卸载策略：确保参考音频处理模型在 GPU 上
+            self._ensure_reference_models_on_gpu()
+
             if self.cache_spk_cond is not None:
                 self.cache_spk_cond = None
                 self.cache_s2mel_style = None
@@ -486,6 +763,9 @@ class IndexTTS2:
             self.cache_s2mel_prompt = prompt_condition
             self.cache_spk_audio_prompt = spk_audio_prompt
             self.cache_mel = ref_mel
+
+            # CPU 卸载策略：参考音频处理完成后，将模型移至 CPU
+            self._offload_reference_models_to_cpu()
         else:
             style = self.cache_s2mel_style
             prompt_condition = self.cache_s2mel_prompt
@@ -506,6 +786,9 @@ class IndexTTS2:
             emovec_mat = emovec_mat.unsqueeze(0)
 
         if self.cache_emo_cond is None or self.cache_emo_audio_prompt != emo_audio_prompt:
+            # CPU 卸载策略：确保 semantic_model 在 GPU 上（用于 get_emb）
+            self._ensure_reference_models_on_gpu()
+
             if self.cache_emo_cond is not None:
                 self.cache_emo_cond = None
                 torch.cuda.empty_cache()
@@ -519,6 +802,9 @@ class IndexTTS2:
 
             self.cache_emo_cond = emo_cond_emb
             self.cache_emo_audio_prompt = emo_audio_prompt
+
+            # CPU 卸载策略：处理完成后将模型移至 CPU
+            self._offload_reference_models_to_cpu()
         else:
             emo_cond_emb = self.cache_emo_cond
 
@@ -721,10 +1007,19 @@ class IndexTTS2:
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
             torchaudio.save(output_path, wav.type(torch.int16), sampling_rate)
             print(">> wav file saved to:", output_path)
+
+            # 超低显存模式：推理完成后释放可选模型
+            if self.ultra_low_memory:
+                self._release_all_optional_models()
+
             if stream_return:
                 return None
             yield output_path
         else:
+            # 超低显存模式：推理完成后释放可选模型
+            if self.ultra_low_memory:
+                self._release_all_optional_models()
+
             if stream_return:
                 return None
             # 返回以符合Gradio的格式要求

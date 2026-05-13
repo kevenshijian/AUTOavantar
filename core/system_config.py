@@ -17,15 +17,22 @@ logger = logging.getLogger(__name__)
 class SystemConfig:
     """系统配置数据类"""
     low_memory_mode: bool = False  # 低显存模式，默认关闭
-    
+    ultra_low_memory: bool = False  # 超低显存模式，默认关闭
+
     def to_dict(self) -> dict:
         """序列化为字典"""
-        return {"low_memory_mode": self.low_memory_mode}
-    
+        return {
+            "low_memory_mode": self.low_memory_mode,
+            "ultra_low_memory": self.ultra_low_memory
+        }
+
     @classmethod
     def from_dict(cls, data: dict) -> "SystemConfig":
         """从字典反序列化"""
-        return cls(low_memory_mode=data.get("low_memory_mode", False))
+        return cls(
+            low_memory_mode=data.get("low_memory_mode", False),
+            ultra_low_memory=data.get("ultra_low_memory", False)
+        )
 
 
 class SystemConfigManager:
@@ -117,7 +124,7 @@ class SystemConfigManager:
     
     def get_low_memory_mode(self) -> bool:
         """获取低显存模式
-        
+
         Returns:
             bool: 是否启用低显存模式
         """
@@ -125,6 +132,36 @@ class SystemConfigManager:
             if self._config is None:
                 self.load()
             return self._config.low_memory_mode
+
+    def set_ultra_low_memory(self, enabled: bool) -> bool:
+        """设置超低显存模式
+
+        Args:
+            enabled: 是否启用超低显存模式
+
+        Returns:
+            bool: 是否设置成功
+        """
+        with self._lock:
+            if self._config is None:
+                self.load()
+
+            self._config.ultra_low_memory = enabled
+            logger.info(f"超低显存模式已设置为: {enabled}")
+
+        # 自动保存
+        return self.save()
+
+    def get_ultra_low_memory(self) -> bool:
+        """获取超低显存模式
+
+        Returns:
+            bool: 是否启用超低显存模式
+        """
+        with self._lock:
+            if self._config is None:
+                self.load()
+            return self._config.ultra_low_memory
 
 
 # 全局配置管理器实例（单例模式）

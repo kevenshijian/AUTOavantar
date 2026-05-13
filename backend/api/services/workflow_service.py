@@ -1378,7 +1378,7 @@ class WorkflowService:
             task.status = AsyncTaskStatus.PENDING
             task.current_stage = "任务已取消，等待重新运行"
             task.updated_at = datetime.now()
-            
+
             if self._db_initialized and self._db:
                 try:
                     await self._db.task_update(
@@ -1389,7 +1389,7 @@ class WorkflowService:
                     )
                 except Exception as e:
                     logger.error(f"取消状态持久化失败: {e}")
-            
+
             await self._notify_status_change(task_id)
             logger.info(f"排队任务 {task_id} 已取消，回到待运行状态")
             return True
@@ -1397,34 +1397,73 @@ class WorkflowService:
         if task.cancel_event:
             task.cancel_event.set()
 
-        # 检查任务当前阶段，如果在视频生成阶段，卸载 HeyGem 引擎释放显存
+        # 检查是否需要卸载模型（低显存模式或超低显存模式开启时）
+        low_memory_mode = self.low_memory_mode
+        # 检查超低显存模式
+        ultra_low_memory = False
+        try:
+            from core.system_config import get_config_manager
+            config_manager = get_config_manager()
+            ultra_low_memory = config_manager.get_ultra_low_memory()
+        except Exception as e:
+            logger.warning(f"读取超低显存模式配置失败: {e}")
+
+        need_unload = low_memory_mode or ultra_low_memory
         current_stage = getattr(task, 'current_stage', '')
-        if current_stage and ('视频生成' in current_stage or '视频合成' in current_stage or 'heygem' in current_stage.lower()):
-            logger.info(f"任务 {task_id} 在视频生成阶段被取消，准备卸载 HeyGem 引擎")
+
+        # 调试日志：显示实际的 current_stage 值
+        logger.info(f"任务 {task_id} 取消时 current_stage={current_stage}, low_memory_mode={low_memory_mode}, ultra_low_memory={ultra_low_memory}, need_unload={need_unload}")
+
+        if need_unload:
+            logger.info(f"任务 {task_id} 被取消，低显存模式或超低显存模式开启，准备卸载引擎")
+
+            # 卸载 TTS 引擎（如果已加载）
+            # 注意：不再依赖 current_stage 判断，因为取消时 current_stage 可能不准确
             try:
                 from core.engines.gpu_manager import get_gpu_manager, EngineType
                 gpu_manager = get_gpu_manager()
+                tts_unloaded = False
                 if gpu_manager:
-                    # 获取并卸载 HeyGem 引擎
+                    tts_engine = gpu_manager.get_engine(EngineType.TTS)
+                    if tts_engine and tts_engine.is_loaded:
+                        tts_engine.unload()
+                        tts_unloaded = True
+                        logger.info(f"任务 {task_id} 取消时 TTS 引擎已卸载")
+
+                # 备用方案：直接尝试卸载 self.tts_engine
+                if not tts_unloaded and self.tts_engine and self.tts_engine.is_loaded:
+                    self.tts_engine.unload()
+                    logger.info(f"任务 {task_id} 取消时 TTS 引擎已卸载（备用方案）")
+            except Exception as e:
+                logger.error(f"任务 {task_id} 取消时卸载 TTS 引擎失败: {e}")
+
+            # 卸载 HeyGem 引擎（如果已加载）
+            try:
+                from core.engines.gpu_manager import get_gpu_manager, EngineType
+                gpu_manager = get_gpu_manager()
+                heygem_unloaded = False
+                if gpu_manager:
                     heygem_engine = gpu_manager.get_engine(EngineType.HEYGEM)
                     if heygem_engine and heygem_engine.is_loaded:
                         heygem_engine.unload()
+                        heygem_unloaded = True
                         logger.info(f"任务 {task_id} 取消时 HeyGem 引擎已卸载")
-                else:
-                    logger.warning(f"任务 {task_id} 取消时无法获取 GPUResourceManager")
+
+                if not heygem_unloaded:
+                    # 备用方案：直接尝试清理 TransDhTask 单例
+                    try:
+                        import sys
+                        if 'engines.heygem.service.trans_dh_service' in sys.modules:
+                            from engines.heygem.service.trans_dh_service import TransDhTask
+                            if hasattr(TransDhTask, '_instance') and TransDhTask._instance is not None:
+                                logger.info(f"任务 {task_id} 尝试直接清理 TransDhTask 单例")
+                                TransDhTask._instance.cleanup()
+                    except Exception as e2:
+                        logger.error(f"任务 {task_id} 备用清理失败: {e2}")
             except Exception as e:
                 logger.error(f"任务 {task_id} 取消时卸载 HeyGem 引擎失败: {e}")
-                # 备用方案：直接尝试清理 TransDhTask 单例
-                try:
-                    import sys
-                    # 检查 TransDhTask 是否已导入
-                    if 'engines.heygem.service.trans_dh_service' in sys.modules:
-                        from engines.heygem.service.trans_dh_service import TransDhTask
-                        if hasattr(TransDhTask, '_instance') and TransDhTask._instance is not None:
-                            logger.info(f"任务 {task_id} 尝试直接清理 TransDhTask 单例")
-                            TransDhTask._instance.cleanup()
-                except Exception as e2:
-                    logger.error(f"任务 {task_id} 备用清理失败: {e2}")
+        else:
+            logger.info(f"任务 {task_id} 被取消，低显存模式关闭，保持引擎加载")
 
         # 同步取消调度器中的任务状态
         try:
@@ -1630,21 +1669,88 @@ class WorkflowService:
                     logger.error(f"进度回调执行失败: {e}")
 
     def shutdown(self):
-        """关闭服务"""
+        """关闭服务
+
+        无论哪种模式，退出系统都需要：
+        1. 卸载所有引擎释放显存
+        2. 清理 CUDA 缓存
+        3. 结束后台进程
+        """
         logger.info("正在关闭工作流服务...")
 
+        # 取消所有运行中的任务
         for task_id, task in list(self._tasks.items()):
             if task.status == AsyncTaskStatus.RUNNING:
                 if task.cancel_event:
                     task.cancel_event.set()
 
+        # 等待线程池完成
         self._executor.shutdown(wait=True)
 
+        # 关闭所有工作流
         for task_id, workflow in self._workflows.items():
             try:
                 workflow.close()
             except Exception as e:
                 logger.error(f"关闭工作流 {task_id} 失败: {e}")
+
+        # 卸载所有引擎（无论哪种模式）
+        logger.info("卸载所有引擎...")
+        try:
+            from core.engines.gpu_manager import get_gpu_manager, EngineType, reset_gpu_manager
+            gpu_manager = get_gpu_manager()
+            if gpu_manager:
+                # 卸载 TTS 引擎
+                tts_engine = gpu_manager.get_engine(EngineType.TTS)
+                if tts_engine and tts_engine.is_loaded:
+                    tts_engine.unload()
+                    logger.info("TTS 引擎已卸载")
+
+                # 卸载 HeyGem 引擎
+                heygem_engine = gpu_manager.get_engine(EngineType.HEYGEM)
+                if heygem_engine and heygem_engine.is_loaded:
+                    heygem_engine.unload()
+                    logger.info("HeyGem 引擎已卸载")
+
+                # 重置 GPU 管理器
+                reset_gpu_manager()
+                logger.info("GPU 管理器已重置")
+        except Exception as e:
+            logger.error(f"卸载引擎失败: {e}")
+            # 备用方案：直接卸载引擎实例
+            try:
+                if self.tts_engine and self.tts_engine.is_loaded:
+                    self.tts_engine.unload()
+                    logger.info("TTS 引擎已卸载（备用方案）")
+            except Exception as e2:
+                logger.error(f"备用卸载 TTS 引擎失败: {e2}")
+
+            try:
+                if self.heygem_engine and self.heygem_engine.is_loaded:
+                    self.heygem_engine.unload()
+                    logger.info("HeyGem 引擎已卸载（备用方案）")
+            except Exception as e2:
+                logger.error(f"备用卸载 HeyGem 引擎失败: {e2}")
+
+        # 清理 CUDA 缓存
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logger.info("CUDA 缓存已清理")
+        except ImportError:
+            pass
+
+        # 清理 TransDhTask 单例（如果存在）
+        try:
+            import sys
+            if 'engines.heygem.service.trans_dh_service' in sys.modules:
+                from engines.heygem.service.trans_dh_service import TransDhTask
+                if hasattr(TransDhTask, '_instance') and TransDhTask._instance is not None:
+                    TransDhTask._instance.cleanup()
+                    logger.info("TransDhTask 单例已清理")
+        except Exception as e:
+            logger.error(f"清理 TransDhTask 单例失败: {e}")
 
         self._tasks.clear()
         self._workflows.clear()
@@ -2244,18 +2350,23 @@ async def init_workflow_service(
             from core.system_config import get_config_manager
             config_manager = get_config_manager()
             low_memory_mode = config_manager.get_low_memory_mode()
+            ultra_low_memory = config_manager.get_ultra_low_memory()
         except Exception as e:
             logger.warning(f"读取低显存模式配置失败，使用默认值: {e}")
             low_memory_mode = False
+            ultra_low_memory = False
 
     # 如果未提供引擎，从配置创建（强制使用 preload_model=False，避免阻塞事件循环）
     if tts_engine is None or heygem_engine is None:
         from core.engines import create_engines_from_config
         # 始终使用 preload_model=False，引擎将在后台线程中加载
-        engines = create_engines_from_config(low_memory_mode=True)  # 强制不预加载
+        engines = create_engines_from_config(
+            low_memory_mode=True,  # 强制不预加载
+            ultra_low_memory=ultra_low_memory
+        )
         tts_engine = tts_engine or engines.get("tts_engine")
         heygem_engine = heygem_engine or engines.get("heygem_engine")
-        logger.info("引擎已创建（延迟加载模式），将在后台线程中加载模型")
+        logger.info(f"引擎已创建（延迟加载模式），将在后台线程中加载模型，超低显存模式: {ultra_low_memory}")
 
     if _global_service is not None:
         _global_service.shutdown()

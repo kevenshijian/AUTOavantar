@@ -22,7 +22,8 @@ logger = logging.getLogger("autoavantar.engines")
 def create_engines_from_config(
     config_path: Optional[str] = None,
     project_root: Optional[str] = None,
-    low_memory_mode: bool = False
+    low_memory_mode: bool = False,
+    ultra_low_memory: bool = False
 ) -> Dict[str, Any]:
     """
     从配置文件创建引擎实例
@@ -31,6 +32,7 @@ def create_engines_from_config(
         config_path: 配置文件路径，None 则使用默认路径
         project_root: 项目根目录，用于解析相对路径
         low_memory_mode: 是否启用低显存模式（True 时不预加载模型）
+        ultra_low_memory: 是否启用超低显存模式（延迟加载 + CPU 卸载）
 
     Returns:
         包含 tts_engine 和 heygem_engine 的字典
@@ -113,7 +115,8 @@ def create_engines_from_config(
             model_dir=tts_model_dir,
             use_fp16=tts_cfg.get("use_fp16", True),
             managed=tts_cfg.get("managed", True),
-            preload_model=preload_model
+            preload_model=preload_model,
+            ultra_low_memory=ultra_low_memory
         )
 
         engines["tts_engine"] = tts_engine
