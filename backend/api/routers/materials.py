@@ -144,7 +144,8 @@ def generate_role_thumbnail(
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
         with open(thumbnail_path, 'wb') as f:
             f.write(base64.b64decode(frame_base64))
-        return str(thumbnail_path)
+        # 返回相对路径，便于跨机器使用
+        return f"data/thumbnails/roles/{role_id}.jpg"
     except Exception as e:
         logger.warning(f"保存缩略图失败: {e}")
         return None
@@ -194,7 +195,8 @@ def generate_scene_thumbnail(
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
         with open(thumbnail_path, 'wb') as f:
             f.write(base64.b64decode(frame_base64))
-        return str(thumbnail_path)
+        # 返回相对路径，便于跨机器使用
+        return f"data/thumbnails/scenes/{scene_id}.jpg"
     except Exception as e:
         logger.warning(f"保存缩略图失败: {e}")
         return None

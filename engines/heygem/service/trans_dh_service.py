@@ -623,12 +623,27 @@ def audio_transfer(drivered_queue, output_imgs_queue, batch_size, terminate_even
         batch_size: 批处理大小
         terminate_event: 终止信号事件（可选）
     """
-    suppress_console_output()  # 抑制控制台输出
+    # 先加载模型，再抑制控制台输出，以便捕获模型加载错误
     output_resize = 1
-    digital_human_model = DigitalHumanModel(GlobalConfig.instance().blend_dynamic, GlobalConfig.instance().chaofen_before, face_blur_detect=False)
-    scrfd_detector = FaceDetect(cpu=False, model_path='face_detect_utils/resources/')
-    scrfd_predictor = pfpld(cpu=False, model_path='face_detect_utils/resources/')
-    hp = Headpose(cpu=False, onnx_path='face_detect_utils/resources/model_float32.onnx')
+    try:
+        logger.info('>>> audio_transfer: 开始加载模型...')
+        digital_human_model = DigitalHumanModel(GlobalConfig.instance().blend_dynamic, GlobalConfig.instance().chaofen_before, face_blur_detect=False)
+        logger.info('>>> audio_transfer: DigitalHumanModel 加载成功')
+        scrfd_detector = FaceDetect(cpu=False, model_path='face_detect_utils/resources/')
+        logger.info('>>> audio_transfer: FaceDetect 加载成功')
+        scrfd_predictor = pfpld(cpu=False, model_path='face_detect_utils/resources/')
+        logger.info('>>> audio_transfer: pfpld 加载成功')
+        hp = Headpose(cpu=False, onnx_path='face_detect_utils/resources/model_float32.onnx')
+        logger.info('>>> audio_transfer: Headpose 加载成功')
+    except Exception as e:
+        logger.error(f'>>> audio_transfer: 模型加载失败: {e}')
+        logger.error(traceback.format_exc())
+        # 通知主进程加载失败
+        output_imgs_queue.put([False, f'模型加载失败: {e}', 'INIT'])
+        return
+
+    # 模型加载成功后，抑制控制台输出
+    suppress_console_output()  # 抑制控制台输出
 
     # 【修改点7】状态字典，用于存储不同任务的超分状态
     task_chaofen_states = {}
