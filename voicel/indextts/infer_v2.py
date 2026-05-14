@@ -1,3 +1,4 @@
+import gc
 import os
 from subprocess import CalledProcessError
 
@@ -1251,10 +1252,8 @@ class QwenEmotion:
         except Exception:
             pass
 
-        # 6. 多次垃圾回收
-        gc.collect()
-        gc.collect()
-        gc.collect()
+        # 6. 垃圾回收
+        gc.collect()  # 单次调用即可清理所有待回收对象
 
         print(">> IndexTTS2 cleanup 完成")
 
