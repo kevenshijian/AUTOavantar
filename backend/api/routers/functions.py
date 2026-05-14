@@ -324,12 +324,12 @@ async def analyze_face(request: FaceAnalysisRequest):
     面部分析接口
 
     处理逻辑：
-    1. 使用 MediaPipe 检测视频每一帧的面部关键点
+    1. 使用 SCRFD/MediaPipe 检测视频每一帧的面部关键点
     2. 判定规则：
-       - 合格：检测到鼻子 + 完整嘴唇（上唇、下唇、左右唇角）
-       - 不合格：缺失任一关键点
-    3. 删除不合格帧，使用 FFmpeg 重新封装视频
-    4. 返回结果：分析状态、不合格帧数、处理后视频路径
+       - 合格：检测到人脸 + 头部姿态角度在范围内（yaw <= 45°, pitch <= 30°）
+       - 不合格：未检测到人脸或头部姿态角度超限
+    3. 删除不合格帧，直接替换原视频
+    4. 返回结果：分析状态、不合格帧数、视频路径
     """
     video_path = request.video_path
 
@@ -344,17 +344,27 @@ async def analyze_face(request: FaceAnalysisRequest):
 
         invalid_count = result.invalid_frames
 
-        output_path = video_path
         if invalid_count > 0:
-            output_path = video_path.replace(".mp4", "_processed.mp4")
+            # 生成临时输出文件
+            temp_output_path = video_path.replace(".mp4", "_temp_processed.mp4")
             # 处理视频，删除不合格帧
-            process_result = analyzer.process_video(video_path, output_path)
-            logger.info(f"面部分析完成，已移除 {invalid_count} 帧不合格画面")
+            process_result = analyzer.process_video(video_path, temp_output_path)
+
+            # 处理成功后，替换原视频
+            if process_result and os.path.exists(temp_output_path):
+                # 删除原视频
+                os.remove(video_path)
+                # 重命名临时文件为原视频路径
+                os.rename(temp_output_path, video_path)
+                logger.info(f"面部分析完成，已移除 {invalid_count} 帧不合格画面，已替换原视频: {video_path}")
+            elif os.path.exists(temp_output_path):
+                # 处理失败但临时文件存在，清理临时文件
+                os.remove(temp_output_path)
 
         return FaceAnalysisResponse(
             status="success",
             invalid_frame_count=invalid_count,
-            output_video_path=output_path,
+            output_video_path=video_path,  # 返回原路径（已替换）
             message=f"分析完成，已移除 {invalid_count} 段不合格画面"
         )
 
@@ -417,9 +427,21 @@ async def run_face_analysis_task(task_id: str, video_path: str):
 
         output_path = video_path
         if invalid_count > 0:
-            output_path = video_path.replace(".mp4", "_processed.mp4")
+            # 生成临时输出文件
+            temp_output_path = video_path.replace(".mp4", "_temp_processed.mp4")
             # 传递已有的检测结果，避免重复检测
-            process_result = analyzer.process_video(video_path, output_path, detect_result=result)
+            process_result = analyzer.process_video(video_path, temp_output_path, detect_result=result)
+
+            # 处理成功后，替换原视频
+            if process_result and os.path.exists(temp_output_path):
+                # 删除原视频
+                os.remove(video_path)
+                # 重命名临时文件为原视频路径
+                os.rename(temp_output_path, video_path)
+                logger.info(f"已替换原视频: {video_path}")
+            elif os.path.exists(temp_output_path):
+                # 处理失败但临时文件存在，清理临时文件
+                os.remove(temp_output_path)
 
         # 检查取消状态（处理视频后）
         if task["status"] == "cancelled":

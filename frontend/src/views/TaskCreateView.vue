@@ -1140,6 +1140,10 @@ const denoiseAudio = async (type) => {
 
 // 面部分析加载状态
 const faceAnalysisLoading = ref({})
+// 正在轮询的任务 ID，用于防止重复调用
+const pollingTaskIds = ref({})
+// 已完成分析的视频路径，用于防止重复分析
+const analyzedVideoPaths = ref(new Set())
 
 // 面部分析 - 使用异步接口避免超时重试
 const analyzeFace = async (type, index = 0) => {
@@ -1162,6 +1166,20 @@ const analyzeFace = async (type, index = 0) => {
   console.log('视频对象:', video)
   console.log('视频路径:', videoPath)
 
+  // 检查是否已经在分析中或已完成分析
+  if (faceAnalysisLoading.value[videoPath] || pollingTaskIds.value[videoPath]) {
+    console.log('视频已在分析中，跳过:', videoPath)
+    ElMessage.warning('该视频正在分析中，请等待完成')
+    return
+  }
+
+  // 检查是否已经分析过（防止重复分析）
+  if (analyzedVideoPaths.value.has(videoPath)) {
+    console.log('视频已完成分析，跳过:', videoPath)
+    ElMessage.info('该视频已完成面部分析')
+    return
+  }
+
   // 设置加载状态
   faceAnalysisLoading.value[videoPath] = true
 
@@ -1172,8 +1190,12 @@ const analyzeFace = async (type, index = 0) => {
 
     if (response.code === 200 || response.task_id) {
       const taskId = response.task_id || response.data?.task_id
+      // 记录正在轮询的任务
+      pollingTaskIds.value[videoPath] = taskId
       // 轮询状态
       await pollFaceAnalysisStatus(taskId, videoPath, type, index)
+      // 轮询结束后清除记录
+      delete pollingTaskIds.value[videoPath]
     } else {
       ElMessage.error('面部分析启动失败: ' + (response.message || '未知错误'))
       faceAnalysisLoading.value[videoPath] = false
@@ -1193,52 +1215,55 @@ const pollFaceAnalysisStatus = async (taskId, videoPath, type, index) => {
   for (let i = 0; i < maxPolls; i++) {
     try {
       const response = await taskApi.getFaceAnalysisStatus(taskId)
+      console.log(`[轮询 ${i}] 响应:`, response)
 
       if (response.code === 200 || response.task_id) {
         const status = response.status || response.data?.status
         const progress = response.progress ?? response.data?.progress ?? 0
         const result = response.result || response.data?.result
         const error = response.error || response.data?.error
+        console.log(`[轮询 ${i}] 状态: ${status}, 进度: ${progress}`)
 
         if (status === 'completed') {
+          console.log('[轮询] 检测到完成，退出轮询')
           ElMessage.success(`面部分析完成，已移除 ${result?.invalid_frame_count || 0} 段不合格画面`)
 
-          // 更新视频路径
-          if (result?.output_video_path) {
-            console.log('更新视频路径为:', result.output_video_path)
-            const timestamp = new Date().getTime()
-            if (type === 'opening') {
-              taskForm.openingVideo = {
-                ...taskForm.openingVideo,
-                path: result.output_video_path,
-                timestamp: timestamp
-              }
-            } else if (type === 'ending') {
-              taskForm.endingVideo = {
-                ...taskForm.endingVideo,
-                path: result.output_video_path,
-                timestamp: timestamp
-              }
-            } else if (type === 'loop') {
-              taskForm.loopVideos[index] = {
-                ...taskForm.loopVideos[index],
-                path: result.output_video_path,
-                timestamp: timestamp
-              }
+          // 标记该视频已完成分析，防止重复分析
+          analyzedVideoPaths.value.add(videoPath)
+
+          // 视频已原地替换，只需要刷新时间戳让视频重新加载
+          const timestamp = new Date().getTime()
+          if (type === 'opening') {
+            taskForm.openingVideo = {
+              ...taskForm.openingVideo,
+              timestamp: timestamp
+            }
+          } else if (type === 'ending') {
+            taskForm.endingVideo = {
+              ...taskForm.endingVideo,
+              timestamp: timestamp
+            }
+          } else if (type === 'loop') {
+            taskForm.loopVideos[index] = {
+              ...taskForm.loopVideos[index],
+              timestamp: timestamp
             }
           }
 
           faceAnalysisLoading.value[videoPath] = false
+          console.log('[轮询] 已清除 loading 状态，路径:', videoPath)
           return
         }
 
         if (status === 'failed') {
+          console.log('[轮询] 检测到失败，退出轮询')
           ElMessage.error('面部分析失败: ' + (error || '未知错误'))
           faceAnalysisLoading.value[videoPath] = false
           return
         }
 
         if (status === 'cancelled') {
+          console.log('[轮询] 检测到取消，退出轮询')
           ElMessage.info('面部分析已取消')
           faceAnalysisLoading.value[videoPath] = false
           return

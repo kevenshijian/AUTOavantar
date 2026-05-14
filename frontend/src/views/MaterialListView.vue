@@ -662,6 +662,8 @@ const uploadProgress = ref(0)
 const audioRefs = ref({})  // 存储音频元素引用
 const playingAudioId = ref(null)  // 当前播放的音频ID
 const faceAnalysisLoading = reactive({})  // 面部分析加载状态 → AC-228
+const pollingTaskIds = reactive({})  // 正在轮询的任务 ID，用于防止重复调用
+const analyzedVideoPaths = reactive(new Set())  // 已完成分析的视频路径，用于防止重复分析
 
 // 设置音频元素引用
 const setAudioRef = (el, id) => {
@@ -1318,6 +1320,20 @@ const handleAudioCanPlay = (event, index) => {
 }
 
 const analyzeFace = async (videoPath, type) => {
+  // 检查是否已经在分析中或已完成分析
+  if (faceAnalysisLoading[videoPath] || pollingTaskIds[videoPath]) {
+    console.log('视频已在分析中，跳过:', videoPath)
+    ElMessage.warning('该视频正在分析中，请等待完成')
+    return
+  }
+
+  // 检查是否已经分析过（防止重复分析）
+  if (analyzedVideoPaths.has(videoPath)) {
+    console.log('视频已完成分析，跳过:', videoPath)
+    ElMessage.info('该视频已完成面部分析')
+    return
+  }
+
   // 设置加载状态 → AC-228
   faceAnalysisLoading[videoPath] = true
 
@@ -1328,8 +1344,14 @@ const analyzeFace = async (videoPath, type) => {
     if (response.code === 200 || response.task_id) {
       const taskId = response.task_id || response.data?.task_id
 
+      // 记录正在轮询的任务
+      pollingTaskIds[videoPath] = taskId
+
       // 轮询状态 → AC-227
       await pollFaceAnalysisStatus(taskId, videoPath, type)
+
+      // 轮询结束后清除记录
+      delete pollingTaskIds[videoPath]
     } else {
       ElMessage.error('面部分析启动失败: ' + (response.message || '未知错误'))
       faceAnalysisLoading[videoPath] = false
@@ -1358,19 +1380,11 @@ const pollFaceAnalysisStatus = async (taskId, videoPath, type) => {
         if (status === 'completed') {
           ElMessage.success(`面部分析完成，已移除 ${result?.invalid_frame_count || 0} 段不合格画面`)
 
-          // 更新视频路径
-          if (result?.output_video_path && result.output_video_path !== videoPath) {
-            if (type === 'opening') {
-              createForm.opening_video = result.output_video_path
-            } else if (type === 'ending') {
-              createForm.ending_video = result.output_video_path
-            } else if (type === 'loop') {
-              const videoIndex = createForm.loop_videos.findIndex(video => video.path === videoPath)
-              if (videoIndex !== -1) {
-                createForm.loop_videos[videoIndex].path = result.output_video_path
-              }
-            }
-          }
+          // 标记该视频已完成分析，防止重复分析
+          analyzedVideoPaths.add(videoPath)
+
+          // 视频已原地替换，不需要更新路径
+          // 视频预览会通过 URL 参数自动刷新
 
           faceAnalysisLoading[videoPath] = false
           return

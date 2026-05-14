@@ -49,13 +49,13 @@ export const taskApi = {
   analyzeFace: (videoPath) => request.post(`/api/tasks/analyze-face?video_path=${encodeURIComponent(videoPath)}`),
 
   // 异步面部分析 → AC-227
-  analyzeFaceAsync: (videoPath) => request.post('/api/functions/face-analysis-async', { video_path: videoPath }),
+  analyzeFaceAsync: (videoPath) => request.post('/api/face-analysis-async', { video_path: videoPath }),
 
   // 查询面部分析任务状态 → AC-227
-  getFaceAnalysisStatus: (taskId) => request.get(`/api/functions/face-analysis-status/${taskId}`),
+  getFaceAnalysisStatus: (taskId) => request.get(`/api/face-analysis-status/${taskId}`),
 
   // 取消面部分析任务 → AC-230
-  cancelFaceAnalysis: (taskId) => request.post(`/api/functions/face-analysis-cancel/${taskId}`)
+  cancelFaceAnalysis: (taskId) => request.post(`/api/face-analysis-cancel/${taskId}`)
 }
 
 // 素材相关 API
