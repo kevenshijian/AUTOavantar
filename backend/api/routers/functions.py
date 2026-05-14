@@ -418,7 +418,8 @@ async def run_face_analysis_task(task_id: str, video_path: str):
         output_path = video_path
         if invalid_count > 0:
             output_path = video_path.replace(".mp4", "_processed.mp4")
-            process_result = analyzer.process_video(video_path, output_path)
+            # 传递已有的检测结果，避免重复检测
+            process_result = analyzer.process_video(video_path, output_path, detect_result=result)
 
         # 检查取消状态（处理视频后）
         if task["status"] == "cancelled":
@@ -460,7 +461,13 @@ async def analyze_face_async(
     """
     video_path = request.video_path
 
-    if not os.path.exists(video_path):
+    # 构建完整的视频路径（处理相对路径）
+    backend_root = Path(__file__).resolve().parent.parent.parent
+    full_video_path = video_path
+    if not os.path.isabs(video_path):
+        full_video_path = str(backend_root / video_path.replace("\\", "/"))
+
+    if not os.path.exists(full_video_path):
         raise HTTPException(status_code=400, detail=f"视频文件不存在: {video_path}")
 
     # 生成任务 ID
@@ -469,7 +476,8 @@ async def analyze_face_async(
     # 初始化任务状态
     face_analysis_tasks[task_id] = {
         "task_id": task_id,
-        "video_path": video_path,
+        "video_path": full_video_path,  # 使用完整路径
+        "original_path": video_path,    # 保存原始路径用于返回
         "status": "pending",
         "progress": 0.0,
         "result": None,
@@ -481,7 +489,7 @@ async def analyze_face_async(
     background_tasks.add_task(
         run_face_analysis_task,
         task_id=task_id,
-        video_path=video_path
+        video_path=full_video_path  # 使用完整路径
     )
 
     logger.info(f"创建异步面部分析任务: {task_id}")

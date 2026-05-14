@@ -740,16 +740,17 @@ async def analyze_face(
         
         if not os.path.exists(full_video_path):
             raise HTTPException(status_code=400, detail=f"视频文件不存在: {video_path}")
-        
+
         result = analyzer.detect_faces(full_video_path)
-        
+
         invalid_count = result.invalid_frames
-        
+
         output_path = full_video_path
         if invalid_count > 0:
             name, ext = os.path.splitext(full_video_path)
             temp_output = f"{name}_temp{ext}"
-            process_result = analyzer.process_video(full_video_path, temp_output)
+            # 传递已有的检测结果，避免重复检测
+            process_result = analyzer.process_video(full_video_path, temp_output, detect_result=result)
             
             try:
                 if os.path.exists(temp_output):

@@ -101,6 +101,7 @@ release/
 启动系统.bat
 2.分发更新.bat
 4.手动更新.bat
+5.清理日志.bat
 start_system.py
 otherLog/
 release-update*/

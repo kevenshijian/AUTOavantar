@@ -89,7 +89,25 @@ class VideoPreprocessor:
         self._init_face_detector()
 
     def _init_face_detector(self):
-        """初始化面部检测器"""
+        """初始化面部检测器 - 优先使用 HeyGem SCRFD (GPU 加速)"""
+        # 优先尝试 HeyGem SCRFD 检测器（支持 GPU）
+        try:
+            from business.preprocess.heygem_face_detector import HeyGemFaceDetector
+
+            logger.info("尝试加载 HeyGem SCRFD 面部检测器（GPU 加速）...")
+            self.heygem_detector = HeyGemFaceDetector(use_gpu=None)  # 自动检测 GPU
+
+            if self.heygem_detector.detector is not None:
+                logger.info("HeyGem SCRFD 检测器初始化成功，将使用 GPU 加速")
+                self.face_detector = self.heygem_detector
+                self.detector_type = "heygem_scrfd"
+                return
+            else:
+                logger.warning("HeyGem SCRFD 检测器初始化失败，回退到 MediaPipe")
+        except Exception as e:
+            logger.warning(f"HeyGem SCRFD 不可用: {e}，回退到 MediaPipe")
+
+        # 回退到 MediaPipe
         try:
             import mediapipe as mp
             from mediapipe.tasks import python
@@ -117,6 +135,7 @@ class VideoPreprocessor:
             )
             self.face_detector = vision.FaceLandmarker.create_from_options(options)
             self.mp_face_mesh = mp
+            self.detector_type = "mediapipe"
             logger.info(f"已加载 MediaPipe FaceLandmarker 模型: {model_path}")
         except Exception as e:
             logger.warning(f"MediaPipe 不可用，将使用 OpenCV Haar 级联检测器: {e}")
@@ -124,6 +143,7 @@ class VideoPreprocessor:
                 cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
             )
             self.mp_face_mesh = None
+            self.detector_type = "opencv_haar"
 
     def _get_video_rotation(self, video_path: str) -> int:
         """
@@ -277,13 +297,14 @@ class VideoPreprocessor:
 
         return result
 
-    def process_video(self, input_path: str, output_path: str) -> bool:
+    def process_video(self, input_path: str, output_path: str, detect_result: VideoPreprocessResult = None) -> bool:
         """
         处理视频，删除不合格帧
 
         Args:
             input_path: 输入视频路径
             output_path: 输出视频路径
+            detect_result: 已有的检测结果（可选，避免重复检测）
 
         Returns:
             是否处理成功
@@ -291,8 +312,11 @@ class VideoPreprocessor:
         if not os.path.exists(input_path):
             raise FileNotFoundError(f"视频文件不存在: {input_path}")
 
-        # 检测面部，获取有效帧索引
-        result = self.detect_faces(input_path)
+        # 使用已有的检测结果，避免重复检测
+        if detect_result is None:
+            result = self.detect_faces(input_path)
+        else:
+            result = detect_result
         valid_frame_indices = result.valid_frame_paths
 
         if not valid_frame_indices:
@@ -347,7 +371,7 @@ class VideoPreprocessor:
     ) -> FaceDetectionResult:
         """
         检测单帧中的面部
-        
+
         使用 HeyGem 嘴唇完整性标准 + 头部姿态角度限制：
         - 左嘴角可见（坐标 > 0）
         - 右嘴角可见（坐标 > 0）
@@ -365,10 +389,47 @@ class VideoPreprocessor:
         )
 
         try:
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # 使用 HeyGem SCRFD 检测器（GPU 加速）
+            if self.detector_type == "heygem_scrfd":
+                heygem_results = self.face_detector.detect_faces(frame, thresh=0.5, max_num=1)
 
-            if hasattr(self.face_detector, 'detect'):
+                if heygem_results and len(heygem_results) > 0:
+                    heygem_result = heygem_results[0]
+                    result.has_face = True
+
+                    # SCRFD 返回的 bbox 格式: [x1, y1, x2, y2, score]
+                    bbox = heygem_result.bbox
+                    result.face_bbox = (int(bbox[0]), int(bbox[1]), int(bbox[2] - bbox[0]), int(bbox[3] - bbox[1]))
+
+                    # SCRFD 返回的 landmarks 格式: (5, 2) - [右眼, 左眼, 鼻尖, 右嘴角, 左嘴角]
+                    landmarks_5 = heygem_result.landmarks
+                    if landmarks_5 is not None:
+                        # 转换为标准格式: [左眼, 右眼, 鼻尖, 左嘴角, 右嘴角]
+                        # SCRFD 顺序: 右眼(0), 左眼(1), 鼻尖(2), 右嘴角(3), 左嘴角(4)
+                        result.landmarks_5 = [
+                            [landmarks_5[1][0], landmarks_5[1][1]],  # 左眼
+                            [landmarks_5[0][0], landmarks_5[0][1]],  # 右眼
+                            [landmarks_5[2][0], landmarks_5[2][1]],  # 鼻尖
+                            [landmarks_5[4][0], landmarks_5[4][1]],  # 左嘴角
+                            [landmarks_5[3][0], landmarks_5[3][1]],  # 右嘴角
+                        ]
+
+                        # 使用 5 点关键点计算头部姿态
+                        validation = self._validate_face_with_5_points(result.landmarks_5, frame.shape)
+                        result.is_valid = validation['is_valid']
+                        result.yaw_angle = validation['yaw']
+                        result.pitch_angle = validation['pitch']
+                        if not validation['is_valid']:
+                            result.reason = ", ".join(validation['reasons'])
+                    else:
+                        result.is_valid = True  # 有面部但无关键点，暂时认为有效
+                else:
+                    result.reason = "未检测到人脸"
+
+            # 使用 MediaPipe 检测器
+            elif hasattr(self.face_detector, 'detect') and self.detector_type == "mediapipe":
                 import mediapipe as mp
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
                 results = self.face_detector.detect(mp_image)
 
@@ -387,24 +448,9 @@ class VideoPreprocessor:
                         result.reason = ", ".join(validation['reasons'])
                 else:
                     result.reason = "未检测到人脸"
-            elif hasattr(self.face_detector, 'process'):
-                results = self.face_detector.process(rgb_frame)
 
-                if results.multi_face_landmarks:
-                    landmarks = results.multi_face_landmarks[0]
-                    result.has_face = True
-                    result.face_bbox = self._get_face_bbox(frame, landmarks)
-                    result.landmarks_5 = self._extract_5_point_landmarks(landmarks, frame.shape)
-
-                    validation = self._validate_face_with_landmarks(landmarks, frame.shape)
-                    result.is_valid = validation['is_valid']
-                    result.yaw_angle = validation['yaw']
-                    result.pitch_angle = validation['pitch']
-                    if not validation['is_valid']:
-                        result.reason = ", ".join(validation['reasons'])
-                else:
-                    result.reason = "未检测到人脸"
-            else:
+            # 使用 OpenCV Haar 级联检测器
+            elif hasattr(self.face_detector, 'detectMultiScale'):
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 faces = self.face_detector.detectMultiScale(gray, 1.3, 5)
 
@@ -676,6 +722,110 @@ class VideoPreprocessor:
             'yaw': yaw,
             'pitch': pitch
         }
+
+    def _validate_face_with_5_points(
+        self,
+        landmarks_5: List[List[float]],
+        frame_shape: Tuple[int, int, int]
+    ) -> Dict[str, Any]:
+        """
+        使用 5 点关键点验证面部有效性
+
+        Args:
+            landmarks_5: 5 点关键点 [[左眼], [右眼], [鼻尖], [左嘴角], [右嘴角]]
+            frame_shape: 帧形状 (h, w, c)
+
+        Returns:
+            {'is_valid': bool, 'reasons': List[str], 'yaw': float, 'pitch': float}
+        """
+        reasons = []
+        yaw = None
+        pitch = None
+
+        if landmarks_5 is None or len(landmarks_5) != 5:
+            return {'is_valid': False, 'reasons': ['关键点不可用'], 'yaw': None, 'pitch': None}
+
+        h, w = frame_shape[:2]
+
+        # 检查嘴角是否可见
+        left_mouth = landmarks_5[3]   # 左嘴角
+        right_mouth = landmarks_5[4]  # 右嘴角
+
+        if left_mouth[0] <= 0 or left_mouth[1] <= 0:
+            reasons.append("左嘴角不可见")
+        if right_mouth[0] <= 0 or right_mouth[1] <= 0:
+            reasons.append("右嘴角不可见")
+
+        # 检查鼻尖是否可见
+        nose = landmarks_5[2]
+        if nose[0] <= 0 or nose[1] <= 0:
+            reasons.append("鼻尖不可见")
+
+        # 计算头部姿态（使用 5 点关键点）
+        yaw, pitch = self._calculate_head_pose_from_5_points(landmarks_5, frame_shape)
+
+        if yaw is None or pitch is None:
+            reasons.append("无法计算头部姿态")
+        else:
+            if abs(yaw) > self.YAW_THRESHOLD:
+                reasons.append(f"偏航角过大({yaw:.1f}°)")
+            if abs(pitch) > self.PITCH_THRESHOLD:
+                reasons.append(f"俯仰角过大({pitch:.1f}°)")
+
+        return {
+            'is_valid': len(reasons) == 0,
+            'reasons': reasons,
+            'yaw': yaw,
+            'pitch': pitch
+        }
+
+    def _calculate_head_pose_from_5_points(
+        self,
+        landmarks_5: List[List[float]],
+        frame_shape: Tuple[int, int, int]
+    ) -> Tuple[Optional[float], Optional[float]]:
+        """
+        使用 5 点关键点计算头部姿态
+
+        Args:
+            landmarks_5: 5 点关键点 [[左眼], [右眼], [鼻尖], [左嘴角], [右嘴角]]
+            frame_shape: 帧形状 (h, w, c)
+
+        Returns:
+            (yaw, pitch) 偏航角和俯仰角
+        """
+        try:
+            h, w = frame_shape[:2]
+
+            # 提取关键点
+            left_eye = np.array(landmarks_5[0])
+            right_eye = np.array(landmarks_5[1])
+            nose = np.array(landmarks_5[2])
+
+            # 计算两眼中心
+            eye_center = (left_eye + right_eye) / 2
+
+            # 计算偏航角 (yaw): 鼻尖相对于两眼中心的水平偏移
+            eye_width = np.linalg.norm(right_eye - left_eye)
+            if eye_width > 0:
+                yaw_offset = (nose[0] - eye_center[0]) / eye_width
+                yaw = np.degrees(np.arctan(yaw_offset * 2))
+            else:
+                yaw = 0
+
+            # 计算俯仰角 (pitch): 鼻尖相对于两眼中心的垂直偏移
+            eye_height = abs(left_eye[1] - right_eye[1])
+            if eye_height > 0 or eye_width > 0:
+                pitch_offset = (nose[1] - eye_center[1]) / max(eye_width, eye_height)
+                pitch = np.degrees(np.arctan(pitch_offset * 1.5))
+            else:
+                pitch = 0
+
+            return yaw, pitch
+
+        except Exception as e:
+            logger.debug(f"计算头部姿态失败: {e}")
+            return None, None
 
     def extract_valid_frames(
         self,

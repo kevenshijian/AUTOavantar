@@ -49,6 +49,8 @@ def setup_logging(log_dir: str = "logs") -> None:
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("requests").setLevel(logging.WARNING)
     logging.getLogger("ffmpeg").setLevel(logging.WARNING)
+    logging.getLogger("python_multipart").setLevel(logging.WARNING)
+    logging.getLogger("python_multipart.multipart").setLevel(logging.WARNING)
 
     # 记录初始化信息
     root_logger.info("日志配置初始化完成")
