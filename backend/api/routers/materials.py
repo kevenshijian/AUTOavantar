@@ -330,6 +330,45 @@ def save_mock_bgms():
     except Exception as e:
         logger.error(f"保存BGM数据失败: {e}")
 
+def normalize_thumbnail_path(thumbnail_path: str) -> str:
+    """
+    规范化缩略图路径，将绝对路径转换为相对路径
+
+    Args:
+        thumbnail_path: 原始缩略图路径（可能是绝对路径或相对路径）
+
+    Returns:
+        相对路径，如 "data/thumbnails/roles/r001.jpg"
+    """
+    if not thumbnail_path:
+        return thumbnail_path
+
+    # 如果已经是相对路径，直接返回
+    if not os.path.isabs(thumbnail_path):
+        return thumbnail_path
+
+    # 提取关键部分：thumbnails/{type}/{id}.jpg
+    import re
+    # 匹配路径中的 thumbnails/roles 或 thumbnails/scenes 部分
+    match = re.search(r'thumbnails[\\/]([^\\/]+)[\\/]([^\\/]+\.jpg)$', thumbnail_path)
+    if match:
+        type_name = match.group(1)  # roles 或 scenes
+        filename = match.group(2)   # 如 r001.jpg
+        return f"data/thumbnails/{type_name}/{filename}"
+
+    # 如果无法匹配，尝试从路径中提取文件名
+    filename = os.path.basename(thumbnail_path)
+    # 根据文件名前缀判断类型（更精确的匹配：r + 数字 或 s + 数字）
+    import re as _re
+    if _re.match(r'^r\d+', filename):
+        return f"data/thumbnails/roles/{filename}"
+    elif _re.match(r'^s\d+', filename):
+        return f"data/thumbnails/scenes/{filename}"
+
+    # 无法转换，返回原路径
+    logger.warning(f"无法规范化缩略图路径: {thumbnail_path}")
+    return thumbnail_path
+
 def load_mock_roles():
     """从文件加载角色数据"""
     global MOCK_ROLES
@@ -337,6 +376,10 @@ def load_mock_roles():
         if MOCK_ROLES_FILE.exists():
             with open(MOCK_ROLES_FILE, 'r', encoding='utf-8') as f:
                 MOCK_ROLES = json.load(f)
+            # 规范化缩略图路径：将绝对路径转换为相对路径
+            for role in MOCK_ROLES:
+                if 'thumbnail' in role and role['thumbnail']:
+                    role['thumbnail'] = normalize_thumbnail_path(role['thumbnail'])
             logger.info(f"已加载 {len(MOCK_ROLES)} 个角色素材")
         else:
             MOCK_ROLES = DEFAULT_ROLES.copy()
@@ -362,6 +405,10 @@ def load_mock_scenes():
         if MOCK_SCENES_FILE.exists():
             with open(MOCK_SCENES_FILE, 'r', encoding='utf-8') as f:
                 MOCK_SCENES = json.load(f)
+            # 规范化缩略图路径：将绝对路径转换为相对路径
+            for scene in MOCK_SCENES:
+                if 'thumbnail' in scene and scene['thumbnail']:
+                    scene['thumbnail'] = normalize_thumbnail_path(scene['thumbnail'])
             logger.info(f"已加载 {len(MOCK_SCENES)} 个场景素材")
         else:
             MOCK_SCENES = DEFAULT_SCENES.copy()

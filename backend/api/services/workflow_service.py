@@ -2089,7 +2089,7 @@ class WorkflowService:
             临时目录路径列表
         """
         project_root = Path(__file__).parent.parent.parent.parent
-        
+
         temp_dirs = [
             str(project_root / "output" / "temp" / "audio"),
             str(project_root / "output" / "temp" / "video"),
@@ -2101,8 +2101,10 @@ class WorkflowService:
             str(project_root / "Portrait" / "change"),
             str(project_root / "backend" / "temp"),
             str(project_root / "backend" / "tmp"),
+            # 添加 heygem temp 目录
+            str(project_root / "engines" / "heygem" / "temp"),
         ]
-        
+
         return [d for d in temp_dirs if os.path.exists(d)]
 
     def cleanup_task_temp_files(self, task_id: str, directory: str) -> int:
@@ -2274,7 +2276,9 @@ class WorkflowService:
         # 清理 heygem temp 目录中的临时文件
         try:
             from pathlib import Path
-            heygem_temp_dir = Path(__file__).parent.parent.parent / "engines" / "heygem" / "temp"
+            # 修复路径：__file__ 位于 backend/api/services/workflow_service.py
+            # 需要向上4级到达项目根目录，然后进入 engines/heygem/temp
+            heygem_temp_dir = Path(__file__).parent.parent.parent.parent / "engines" / "heygem" / "temp"
             if heygem_temp_dir.exists():
                 heygem_deleted = self._cleanup_heygem_temp_dir(str(heygem_temp_dir))
                 if heygem_deleted > 0:

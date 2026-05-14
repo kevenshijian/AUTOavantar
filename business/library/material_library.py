@@ -777,10 +777,24 @@ class MaterialLibrary:
 
         file_path, thumbnail_path = row
 
-        if file_path and os.path.exists(file_path):
-            os.remove(file_path)
-        if thumbnail_path and os.path.exists(thumbnail_path):
-            os.remove(thumbnail_path)
+        # 删除文件（支持相对路径和绝对路径）
+        if file_path:
+            # 尝试相对路径和绝对路径
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            elif not os.path.isabs(file_path):
+                # 如果是相对路径且不存在，尝试从当前目录查找
+                abs_path = os.path.abspath(file_path)
+                if os.path.exists(abs_path):
+                    os.remove(abs_path)
+
+        if thumbnail_path:
+            if os.path.exists(thumbnail_path):
+                os.remove(thumbnail_path)
+            elif not os.path.isabs(thumbnail_path):
+                abs_path = os.path.abspath(thumbnail_path)
+                if os.path.exists(abs_path):
+                    os.remove(abs_path)
 
         cursor.execute(f"DELETE FROM {table} WHERE id = ?", (material_id,))
         conn.commit()
@@ -817,7 +831,11 @@ class MaterialLibrary:
         output_dir: str,
         video_id: str
     ) -> str:
-        """生成视频缩略图"""
+        """生成视频缩略图
+
+        Returns:
+            相对路径，如 "data/materials/thumbnails/vid_xxx.jpg"
+        """
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, f"{video_id}.jpg")
 
@@ -832,7 +850,8 @@ class MaterialLibrary:
             if ret:
                 frame = cv2.resize(frame, (320, 180))
                 cv2.imwrite(output_path, frame)
-                return output_path
+                # 返回相对路径，而不是绝对路径
+                return os.path.join(output_dir, f"{video_id}.jpg").replace('\\', '/')
         except Exception as e:
             logger.warning(f"生成缩略图失败: {e}")
 
@@ -844,7 +863,11 @@ class MaterialLibrary:
         category: str,
         material_id: str
     ) -> str:
-        """复制文件到存储目录"""
+        """复制文件到存储目录
+
+        Returns:
+            相对路径，如 "data/materials/videos/vid_xxx.mp4"
+        """
         storage_dir = f"data/materials/{category}"
         os.makedirs(storage_dir, exist_ok=True)
 
@@ -852,7 +875,8 @@ class MaterialLibrary:
         dest_path = os.path.join(storage_dir, f"{material_id}{ext}")
 
         shutil.copy2(source_path, dest_path)
-        return dest_path
+        # 返回相对路径，而不是绝对路径
+        return os.path.join(storage_dir, f"{material_id}{ext}").replace('\\', '/')
 
     def _generate_file_hash(self, file_path: str) -> str:
         """生成文件哈希"""
