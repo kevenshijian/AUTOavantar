@@ -7,8 +7,11 @@ import os
 import logging
 import json
 import platform
+import uuid
+import asyncio
 from typing import Optional, List, Dict, Any
 from pathlib import Path
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
@@ -22,6 +25,37 @@ from api.services.llm_service import LLMScriptGenerator, create_script_generator
 logger = logging.getLogger("autoavantar-api.functions")
 
 router = APIRouter()
+
+
+# ============================================================================
+# 异步面部分析任务存储 → AC-227
+# ============================================================================
+face_analysis_tasks: Dict[str, Dict] = {}
+
+
+def cleanup_expired_face_analysis_tasks(max_age_hours: int = 2):
+    """
+    清理过期的面部分析任务 → AC-227
+
+    Args:
+        max_age_hours: 最大保留时间（小时）
+    """
+    now = datetime.now()
+    expired_task_ids = []
+
+    for task_id, task in face_analysis_tasks.items():
+        created_at = task.get("created_at")
+        if created_at:
+            age = now - created_at
+            if age.total_seconds() > max_age_hours * 3600:
+                expired_task_ids.append(task_id)
+
+    for task_id in expired_task_ids:
+        del face_analysis_tasks[task_id]
+        logger.info(f"清理过期面部分析任务: {task_id}")
+
+    if expired_task_ids:
+        logger.info(f"已清理 {len(expired_task_ids)} 个过期任务")
 
 
 class FaceAnalysisRequest(BaseModel):
@@ -95,6 +129,30 @@ class ExtractFrameResponse(BaseModel):
     code: int = 200
     message: str = "success"
     data: Optional[Dict[str, Any]] = None
+
+
+# ============================================================================
+# 异步面部分析请求/响应模型 → AC-227, AC-230
+# ============================================================================
+class FaceAnalysisAsyncRequest(BaseModel):
+    """异步面部分析请求"""
+    video_path: str
+    video_type: str = "opening"
+
+
+class FaceAnalysisAsyncResponse(BaseModel):
+    """异步面部分析响应"""
+    task_id: str
+    status: str
+
+
+class FaceAnalysisStatusResponse(BaseModel):
+    """面部分析任务状态响应"""
+    task_id: str
+    status: str
+    progress: float
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
 
 
 _face_analyzer: Optional[VideoPreprocessor] = None
@@ -303,6 +361,170 @@ async def analyze_face(request: FaceAnalysisRequest):
     except Exception as e:
         logger.error(f"面部分析失败: {e}")
         raise HTTPException(status_code=500, detail=f"面部分析失败: {str(e)}")
+
+
+# ============================================================================
+# 异步面部分析接口 → AC-227, AC-230
+# ============================================================================
+
+async def run_face_analysis_task(task_id: str, video_path: str):
+    """
+    后台执行面部分析任务 → AC-227
+
+    Args:
+        task_id: 任务 ID
+        video_path: 视频路径
+    """
+    task = face_analysis_tasks.get(task_id)
+    if not task:
+        return
+
+    # 检查是否已被取消
+    if task["status"] == "cancelled":
+        logger.info(f"任务 {task_id} 已取消，停止执行")
+        return
+
+    try:
+        task["status"] = "running"
+        task["progress"] = 0.1
+
+        # 检查取消状态
+        if task["status"] == "cancelled":
+            logger.info(f"任务 {task_id} 在初始化阶段被取消")
+            return
+
+        # 获取面部分析器
+        analyzer = get_face_analyzer()
+
+        task["progress"] = 0.2
+
+        # 检查取消状态
+        if task["status"] == "cancelled":
+            logger.info(f"任务 {task_id} 在获取分析器后被取消")
+            return
+
+        # 检测面部
+        result = analyzer.detect_faces(video_path)
+
+        task["progress"] = 0.6
+
+        # 检查取消状态
+        if task["status"] == "cancelled":
+            logger.info(f"任务 {task_id} 在面部检测后被取消")
+            return
+
+        invalid_count = result.invalid_frames
+
+        output_path = video_path
+        if invalid_count > 0:
+            output_path = video_path.replace(".mp4", "_processed.mp4")
+            process_result = analyzer.process_video(video_path, output_path)
+
+        # 检查取消状态（处理视频后）
+        if task["status"] == "cancelled":
+            logger.info(f"任务 {task_id} 在视频处理后被取消")
+            return
+
+        task["progress"] = 0.9
+
+        # 更新任务状态
+        task["status"] = "completed"
+        task["progress"] = 1.0
+        task["result"] = {
+            "invalid_frame_count": invalid_count,
+            "output_video_path": output_path,
+            "message": f"分析完成，已移除 {invalid_count} 段不合格画面"
+        }
+
+        logger.info(f"面部分析任务 {task_id} 完成")
+
+    except Exception as e:
+        # 如果是取消状态，不记录为失败
+        if task["status"] == "cancelled":
+            logger.info(f"任务 {task_id} 已取消，不记录错误")
+            return
+        logger.error(f"面部分析任务 {task_id} 失败: {e}")
+        task["status"] = "failed"
+        task["error"] = str(e)
+
+
+@router.post("/face-analysis-async", response_model=FaceAnalysisAsyncResponse)
+async def analyze_face_async(
+    request: FaceAnalysisAsyncRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    异步面部分析接口 → AC-227
+
+    立即返回 task_id，分析在后台执行
+    """
+    video_path = request.video_path
+
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=400, detail=f"视频文件不存在: {video_path}")
+
+    # 生成任务 ID
+    task_id = str(uuid.uuid4())
+
+    # 初始化任务状态
+    face_analysis_tasks[task_id] = {
+        "task_id": task_id,
+        "video_path": video_path,
+        "status": "pending",
+        "progress": 0.0,
+        "result": None,
+        "error": None,
+        "created_at": datetime.now()
+    }
+
+    # 添加后台任务
+    background_tasks.add_task(
+        run_face_analysis_task,
+        task_id=task_id,
+        video_path=video_path
+    )
+
+    logger.info(f"创建异步面部分析任务: {task_id}")
+
+    return FaceAnalysisAsyncResponse(task_id=task_id, status="pending")
+
+
+@router.get("/face-analysis-status/{task_id}", response_model=FaceAnalysisStatusResponse)
+async def get_face_analysis_status(task_id: str):
+    """
+    查询面部分析任务状态 → AC-227
+    """
+    task = face_analysis_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    return FaceAnalysisStatusResponse(
+        task_id=task_id,
+        status=task["status"],
+        progress=task["progress"],
+        result=task["result"],
+        error=task["error"]
+    )
+
+
+@router.post("/face-analysis-cancel/{task_id}")
+async def cancel_face_analysis(task_id: str):
+    """
+    取消面部分析任务 → AC-230
+    """
+    task = face_analysis_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if task["status"] in ["completed", "failed", "cancelled"]:
+        raise HTTPException(status_code=400, detail="任务已结束，无法取消")
+
+    # 标记为已取消
+    task["status"] = "cancelled"
+
+    logger.info(f"取消面部分析任务: {task_id}")
+
+    return {"task_id": task_id, "status": "cancelled"}
 
 
 @router.post("/extract-audio", response_model=ExtractAudioResponse)

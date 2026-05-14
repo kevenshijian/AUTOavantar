@@ -1853,16 +1853,17 @@ class MaterialLibrary:
         """
         return self.delete_global_tag(tag_id)
 
-    def face_analyze(self, video_path: str, sample_interval: int = 0) -> FaceAnalysisResult:
+    def face_analyze(self, video_path: str, sample_interval: int = 0, use_gpu: Optional[bool] = None) -> FaceAnalysisResult:
         """
         对视频进行面部分析 (使用 HeyGem 兼容的 SCRFD 模型)
 
         Args:
             video_path: 视频路径
             sample_interval: 采样间隔，0表示每帧分析
+            use_gpu: 是否使用 GPU，None 表示自动检测 → AC-226, AC-229
 
         Returns:
-            面部位析结果
+            面部分析结果
         """
         logger.info(f"开始面部分析 (HeyGem SCRFD): {video_path}")
 
@@ -1874,7 +1875,7 @@ class MaterialLibrary:
             from business.preprocess.heygem_face_detector import HeyGemFaceDetector
 
             logger.info("使用 HeyGem SCRFD 面部检测器...")
-            detector = HeyGemFaceDetector(use_gpu=False)
+            detector = HeyGemFaceDetector(use_gpu=use_gpu)  # → AC-226
 
             if detector.detector is None:
                 logger.warning("SCRFD 初始化失败，尝试使用 MediaPipe")

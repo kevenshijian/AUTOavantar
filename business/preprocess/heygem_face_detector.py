@@ -55,7 +55,7 @@ class HeyGemFaceDetector:
     def __init__(
         self,
         model_path: Optional[str] = None,
-        use_gpu: bool = True,
+        use_gpu: Optional[bool] = None,
         input_size: Tuple[int, int] = (640, 640)
     ):
         """
@@ -63,14 +63,46 @@ class HeyGemFaceDetector:
 
         Args:
             model_path: SCRFD 模型路径
-            use_gpu: 是否使用 GPU
+            use_gpu: 是否使用 GPU，None 表示自动检测
             input_size: 输入图像大小
         """
         self.model_path = model_path
+        # 自动检测 CUDA 可用性 → AC-229
+        if use_gpu is None:
+            use_gpu = self._check_cuda_available()
         self.use_gpu = use_gpu
         self.input_size = input_size
         self.detector = None
         self._init_detector()
+
+    def _check_cuda_available(self) -> bool:
+        """
+        检测 CUDA 是否可用 → AC-229
+
+        Returns:
+            True 如果 CUDA 可用且显存足够
+        """
+        try:
+            import torch
+            if torch.cuda.is_available():
+                # 检查显存是否足够（至少 2GB）
+                gpu_id = 0
+                total_mem = torch.cuda.get_device_properties(gpu_id).total_memory
+                min_mem = 2 * 1024 * 1024 * 1024  # 2GB
+                if total_mem >= min_mem:
+                    logger.info(f"CUDA 可用，使用 GPU 加速 (显存: {total_mem // (1024**3)}GB)")
+                    return True
+                else:
+                    logger.warning(f"GPU 显存不足 ({total_mem // (1024**3)}GB)，降级到 CPU")
+                    return False
+            logger.info("CUDA 不可用，使用 CPU 模式")
+            return False
+        except ImportError:
+            logger.info("PyTorch 未安装，使用 CPU 模式")
+            return False
+        except Exception as e:
+            logger.warning(f"CUDA 检测失败: {e}，使用 CPU 模式")
+            return False
 
     def _init_detector(self):
         """初始化 SCRFD 检测器"""
@@ -94,12 +126,25 @@ class HeyGemFaceDetector:
 
             logger.info(f"加载 SCRFD 模型: {self.model_path}")
 
-            # 初始化检测器
-            cpu = not self.use_gpu
-            self.detector = SCRFD(model_file=self.model_path, cpu=cpu)
-            self.detector.prepare(ctx_id=0 if self.use_gpu else -1, input_size=self.input_size)
-
-            logger.info("SCRFD 面部检测器初始化成功")
+            # 尝试使用 GPU，失败时降级到 CPU → AC-226, AC-229
+            if self.use_gpu:
+                try:
+                    cpu = False
+                    self.detector = SCRFD(model_file=self.model_path, cpu=cpu)
+                    self.detector.prepare(ctx_id=0, input_size=self.input_size)
+                    logger.info("SCRFD GPU 模式初始化成功")
+                except Exception as gpu_error:
+                    logger.warning(f"GPU 初始化失败: {gpu_error}，降级到 CPU")
+                    self.use_gpu = False
+                    cpu = True
+                    self.detector = SCRFD(model_file=self.model_path, cpu=cpu)
+                    self.detector.prepare(ctx_id=-1, input_size=self.input_size)
+                    logger.info("SCRFD CPU 模式初始化成功（GPU 降级）")
+            else:
+                cpu = True
+                self.detector = SCRFD(model_file=self.model_path, cpu=cpu)
+                self.detector.prepare(ctx_id=-1, input_size=self.input_size)
+                logger.info("SCRFD CPU 模式初始化成功")
 
         except ImportError as e:
             logger.warning(f"无法导入 SCRFD: {e}")
@@ -351,22 +396,31 @@ class HeyGemFaceDetector:
         return result
 
 
-def create_heygem_detector(use_gpu: bool = True) -> HeyGemFaceDetector:
-    """创建 HeyGem 面部检测器的便捷函数"""
+def create_heygem_detector(use_gpu: Optional[bool] = None) -> HeyGemFaceDetector:
+    """
+    创建 HeyGem 面部检测器的便捷函数
+
+    Args:
+        use_gpu: 是否使用 GPU，None 表示自动检测
+
+    Returns:
+        HeyGemFaceDetector 实例
+    """
     return HeyGemFaceDetector(use_gpu=use_gpu)
 
 
-def quick_analyze_video(video_path: str) -> Dict[str, Any]:
+def quick_analyze_video(video_path: str, use_gpu: Optional[bool] = None) -> Dict[str, Any]:
     """
     快速分析视频人脸
 
     Args:
         video_path: 视频路径
+        use_gpu: 是否使用 GPU，None 表示自动检测
 
     Returns:
         分析结果
     """
-    detector = HeyGemFaceDetector(use_gpu=False)
+    detector = HeyGemFaceDetector(use_gpu=use_gpu)
     return detector.analyze_video(video_path, sample_interval=30)
 
 

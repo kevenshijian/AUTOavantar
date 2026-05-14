@@ -1,12 +1,5 @@
 # Dependencies
 frontend/node_modules/
-frontend/public/
-frontend/src/
-frontend/index.html
-frontend/package.json
-frontend/package-lock.json
-frontend/vite.config.js
-frontend/vitest.config.js
 backend/venv/
 backend/__pycache__/
 backend/logs/
