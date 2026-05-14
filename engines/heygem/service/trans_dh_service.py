@@ -1483,6 +1483,10 @@ class TransDhTask(object):
         # 终止信号事件
         self._terminate_event = multiprocessing.Event()
 
+        # 追踪任务执行中创建的临时子进程
+        self._active_task_processes = {}  # {task_code: [Process, ...]}
+        self._task_processes_lock = threading.Lock()
+
         # 保存子进程引用，用于后续终止（传递 terminate_event）
         self._audio_transfer_process = Process(
             target=audio_transfer,
@@ -1657,6 +1661,11 @@ class TransDhTask(object):
                     process_list.append(Process(target=write_video_chaofen, args=(self.output_imgs_queue, GlobalConfig.instance().temp_dir, GlobalConfig.instance().result_dir, code, _tmp_audio_path, self.result_queue, width, height, fps, watermark_switch, digital_auth, output_path), daemon=True))
                 else:
                     process_list.append(Process(target=write_video, args=(self.output_imgs_queue, GlobalConfig.instance().temp_dir, GlobalConfig.instance().result_dir, code, _tmp_audio_path, self.result_queue, width, height, fps, watermark_switch, digital_auth, output_path), daemon=True))
+
+                # 追踪任务子进程，用于系统退出时清理
+                with self._task_processes_lock:
+                    self._active_task_processes[code] = process_list
+
                 [p.start() for p in process_list]
 
                 # 使用带超时的 join，以便检查取消信号
@@ -1697,6 +1706,10 @@ class TransDhTask(object):
                     except Empty:
                         self.change_task_status(code, Status.error, 0, '', '**生成视频失败')
                 finally:
+                    # 清理任务子进程追踪记录
+                    with self._task_processes_lock:
+                        if code in self._active_task_processes:
+                            del self._active_task_processes[code]
                     del audio_wenet_feature
                     gc.collect()
             except Exception as e:
@@ -1754,11 +1767,12 @@ class TransDhTask(object):
         CR-026: 低显存模式支持
         释放以下资源：
         1. 发送终止信号给子进程
-        2. 等待子进程退出
-        3. wenet_model - WeNet 模型
-        4. 多进程队列
-        5. CUDA 缓存
-        6. 类级别单例
+        2. 终止所有任务执行中的临时子进程
+        3. 等待常驻子进程退出
+        4. wenet_model - WeNet 模型
+        5. 多进程队列
+        6. CUDA 缓存
+        7. 类级别单例
         """
         logger.info("TransDhTask cleanup 开始...")
 
@@ -1767,7 +1781,26 @@ class TransDhTask(object):
             logger.info("发送终止信号给子进程...")
             self._terminate_event.set()
 
-        # 2. 等待子进程退出（最多等待 5 秒）
+        # 2. 终止所有任务执行中的临时子进程
+        if hasattr(self, '_active_task_processes') and hasattr(self, '_task_processes_lock'):
+            with self._task_processes_lock:
+                for task_code, process_list in list(self._active_task_processes.items()):
+                    logger.info(f"终止任务 {task_code} 的 {len(process_list)} 个子进程...")
+                    for proc in process_list:
+                        if proc is not None and proc.is_alive():
+                            try:
+                                proc.terminate()
+                                proc.join(timeout=1.0)
+                                if proc.is_alive():
+                                    logger.warning(f"任务 {task_code} 的子进程未能终止，强制 kill")
+                                    proc.kill()
+                            except Exception as e:
+                                logger.warning(f"终止任务 {task_code} 的子进程失败: {e}")
+                    logger.info(f"任务 {task_code} 的子进程已终止")
+                self._active_task_processes.clear()
+                logger.info("所有任务子进程已终止")
+
+        # 3. 等待常驻子进程退出（最多等待 5 秒）
         for proc_name in ['_audio_transfer_process', '_init_wh_process']:
             if hasattr(self, proc_name):
                 proc = getattr(self, proc_name)
@@ -1787,7 +1820,7 @@ class TransDhTask(object):
                         pass
                     setattr(self, proc_name, None)
 
-        # 3. 释放 wenet_model
+        # 4. 释放 wenet_model
         if hasattr(self, 'wenet_model') and self.wenet_model is not None:
             try:
                 # wenet_model 是一个元组 (model, configs)
@@ -1802,7 +1835,7 @@ class TransDhTask(object):
             except Exception as e:
                 logger.warning(f"释放 wenet_model 失败: {e}")
 
-        # 4. 清理多进程队列
+        # 5. 清理多进程队列
         for queue_name in ['drivered_queue', 'output_imgs_queue', 'result_queue', 'init_wh_queue', 'init_wh_queue_output']:
             if hasattr(self, queue_name):
                 try:
@@ -1821,11 +1854,11 @@ class TransDhTask(object):
                 except Exception as e:
                     logger.debug(f"清理队列 {queue_name} 失败: {e}")
 
-        # 5. 清理任务字典
+        # 6. 清理任务字典
         if hasattr(self, 'task_dic'):
             self.task_dic.clear()
 
-        # 6. 清理终止事件
+        # 7. 清理终止事件
         if hasattr(self, '_terminate_event'):
             try:
                 del self._terminate_event
@@ -1833,7 +1866,7 @@ class TransDhTask(object):
             except Exception:
                 pass
 
-        # 7. 清理 CUDA 缓存
+        # 8. 清理 CUDA 缓存
         try:
             import torch
             if torch.cuda.is_available():
@@ -1844,7 +1877,7 @@ class TransDhTask(object):
         except Exception as e:
             logger.debug(f"清理 CUDA 缓存失败: {e}")
 
-        # 8. 清除类级别单例（关键！）
+        # 9. 清除类级别单例（关键！）
         if hasattr(TransDhTask, '_instance'):
             try:
                 del TransDhTask._instance
@@ -1852,7 +1885,7 @@ class TransDhTask(object):
             except Exception as e:
                 logger.warning(f"清除 TransDhTask._instance 失败: {e}")
 
-        # 9. 多次垃圾回收
+        # 10. 多次垃圾回收
         gc.collect()
         gc.collect()
         gc.collect()

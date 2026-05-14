@@ -251,3 +251,62 @@ async def trigger_update():
     except Exception as e:
         logger.error(f"触发更新失败: {e}")
         raise HTTPException(status_code=500, detail=f"触发更新失败: {str(e)}")
+
+
+class ShutdownResponse(BaseModel):
+    """关闭响应模型"""
+    success: bool
+    message: str
+
+
+@router.post("/shutdown", response_model=ShutdownResponse)
+async def shutdown_system():
+    """
+    系统关闭接口
+
+    在系统退出前调用，确保所有引擎资源正确释放：
+    1. 卸载 TTS 引擎
+    2. 卸载 HeyGem 引擎
+    3. 终止所有子进程
+    4. 释放显存
+
+    此接口由 desktop_launcher 在退出前调用。
+    """
+    try:
+        logger.info("收到系统关闭请求，开始清理资源...")
+
+        # 调用工作流服务的 shutdown 方法
+        from api.services.workflow_service import get_workflow_service
+        service = get_workflow_service()
+
+        if service:
+            logger.info("正在关闭工作流服务...")
+            service.shutdown()
+            logger.info("工作流服务已关闭")
+        else:
+            logger.info("工作流服务未初始化，跳过关闭")
+
+        # 清理 CUDA 缓存
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                logger.info("CUDA 缓存已清理")
+        except ImportError:
+            pass
+
+        logger.info("系统资源清理完成")
+
+        return ShutdownResponse(
+            success=True,
+            message="系统资源已清理"
+        )
+    except Exception as e:
+        logger.error(f"系统关闭清理失败: {e}")
+        # 即使失败也返回成功，因为后端进程会被强制终止
+        return ShutdownResponse(
+            success=True,
+            message=f"清理过程出现异常但已忽略: {str(e)}"
+        )
