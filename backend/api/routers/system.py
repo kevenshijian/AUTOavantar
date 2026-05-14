@@ -224,7 +224,6 @@ async def trigger_update():
     → AC-003: 触发更新流程
     """
     import asyncio
-    import signal
 
     try:
         app_dir = get_app_dir()
@@ -238,8 +237,22 @@ async def trigger_update():
         async def delayed_exit():
             await asyncio.sleep(3)
             logger.info("系统退出，准备执行更新...")
-            # 发送 SIGTERM 信号退出进程
-            os.kill(os.getpid(), signal.SIGTERM)
+
+            # 先调用 shutdown 接口进行资源清理
+            try:
+                import urllib.request
+                shutdown_url = f"http://127.0.0.1:8000/api/system/shutdown"
+                req = urllib.request.Request(shutdown_url, method='POST')
+                req.add_header('Content-Type', 'application/json')
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    logger.info(f"清理接口调用完成: {response.status}")
+            except Exception as e:
+                logger.warning(f"清理接口调用失败: {e}")
+
+            # Windows 上使用 os._exit 强制退出，比 SIGTERM 更可靠
+            # SIGTERM 在 Windows 上可能被忽略或处理不当
+            import os
+            os._exit(0)
 
         # 启动延迟退出任务
         asyncio.create_task(delayed_exit())
