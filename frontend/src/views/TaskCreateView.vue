@@ -53,8 +53,8 @@
                     </div>
                   </div>
                   <div class="video-actions">
-                    <el-button type="primary" link @click="analyzeFace('opening')">
-                      <el-icon><Search /></el-icon> 面部分析
+                    <el-button type="primary" link @click="analyzeFace('opening')" :loading="faceAnalysisLoading[taskForm.openingVideo?.path]" :disabled="faceAnalysisLoading[taskForm.openingVideo?.path]">
+                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[taskForm.openingVideo?.path] ? '分析中...' : '面部分析' }}
                     </el-button>
                     <el-button type="danger" link @click="removeVideo('opening')">
                       <el-icon><Delete /></el-icon> 移除
@@ -95,8 +95,8 @@
                       <el-option label="惊喜" value="surprised" />
                       <el-option label="冷静" value="calm" />
                     </el-select>
-                    <el-button type="primary" link @click="analyzeFace('loop', index)">
-                      <el-icon><Search /></el-icon> 面部分析
+                    <el-button type="primary" link @click="analyzeFace('loop', index)" :loading="faceAnalysisLoading[video?.path]" :disabled="faceAnalysisLoading[video?.path]">
+                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[video?.path] ? '分析中...' : '面部分析' }}
                     </el-button>
                     <el-button type="danger" link @click="removeLoopVideo(index)">
                       <el-icon><Delete /></el-icon> 移除
@@ -123,8 +123,8 @@
                     </div>
                   </div>
                   <div class="video-actions">
-                    <el-button type="primary" link @click="analyzeFace('ending')">
-                      <el-icon><Search /></el-icon> 面部分析
+                    <el-button type="primary" link @click="analyzeFace('ending')" :loading="faceAnalysisLoading[taskForm.endingVideo?.path]" :disabled="faceAnalysisLoading[taskForm.endingVideo?.path]">
+                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[taskForm.endingVideo?.path] ? '分析中...' : '面部分析' }}
                     </el-button>
                     <el-button type="danger" link @click="removeVideo('ending')">
                       <el-icon><Delete /></el-icon> 移除
@@ -1138,7 +1138,10 @@ const denoiseAudio = async (type) => {
   }
 }
 
-// 面部分析
+// 面部分析加载状态
+const faceAnalysisLoading = ref({})
+
+// 面部分析 - 使用异步接口避免超时重试
 const analyzeFace = async (type, index = 0) => {
   console.log('开始面部分析，类型:', type, '索引:', index)
   let video
@@ -1149,57 +1152,113 @@ const analyzeFace = async (type, index = 0) => {
   } else if (type === 'loop') {
     video = taskForm.loopVideos[index]
   }
-  
+
   if (!video) {
     ElMessage.warning('请先选择视频')
     return
   }
-  
+
+  const videoPath = video.path
   console.log('视频对象:', video)
-  console.log('视频路径:', video.path)
-  
+  console.log('视频路径:', videoPath)
+
+  // 设置加载状态
+  faceAnalysisLoading.value[videoPath] = true
+
   try {
-    const result = await taskStore.analyzeFace(video.path)
-    console.log('面部分析结果:', result)
-    
-    // 处理后端返回的数据格式
-    const analysisResult = result.data || result
-    console.log('处理后的分析结果:', analysisResult)
-    
-    // 更新视频路径为处理后的路径
-    if (analysisResult && analysisResult.output_video_path) {
-      console.log('更新视频路径为:', analysisResult.output_video_path)
-      // 添加时间戳参数，确保预览更新
-      const timestamp = new Date().getTime()
-      if (type === 'opening') {
-        // 创建新对象，避免引用问题
-        taskForm.openingVideo = {
-          ...taskForm.openingVideo,
-          path: analysisResult.output_video_path,
-          timestamp: timestamp
+    // 使用异步接口 → AC-227
+    const response = await taskApi.analyzeFaceAsync(videoPath)
+    console.log('异步面部分析启动:', response)
+
+    if (response.code === 200 || response.task_id) {
+      const taskId = response.task_id || response.data?.task_id
+      // 轮询状态
+      await pollFaceAnalysisStatus(taskId, videoPath, type, index)
+    } else {
+      ElMessage.error('面部分析启动失败: ' + (response.message || '未知错误'))
+      faceAnalysisLoading.value[videoPath] = false
+    }
+  } catch (error) {
+    console.error('面部分析失败:', error)
+    ElMessage.error('面部分析失败: ' + (error.message || '未知错误'))
+    faceAnalysisLoading.value[videoPath] = false
+  }
+}
+
+// 状态轮询函数 → AC-227
+const pollFaceAnalysisStatus = async (taskId, videoPath, type, index) => {
+  const maxPolls = 120  // 最多轮询 120 次（2 分钟）
+  const pollInterval = 1000  // 1 秒
+
+  for (let i = 0; i < maxPolls; i++) {
+    try {
+      const response = await taskApi.getFaceAnalysisStatus(taskId)
+
+      if (response.code === 200 || response.task_id) {
+        const status = response.status || response.data?.status
+        const progress = response.progress ?? response.data?.progress ?? 0
+        const result = response.result || response.data?.result
+        const error = response.error || response.data?.error
+
+        if (status === 'completed') {
+          ElMessage.success(`面部分析完成，已移除 ${result?.invalid_frame_count || 0} 段不合格画面`)
+
+          // 更新视频路径
+          if (result?.output_video_path) {
+            console.log('更新视频路径为:', result.output_video_path)
+            const timestamp = new Date().getTime()
+            if (type === 'opening') {
+              taskForm.openingVideo = {
+                ...taskForm.openingVideo,
+                path: result.output_video_path,
+                timestamp: timestamp
+              }
+            } else if (type === 'ending') {
+              taskForm.endingVideo = {
+                ...taskForm.endingVideo,
+                path: result.output_video_path,
+                timestamp: timestamp
+              }
+            } else if (type === 'loop') {
+              taskForm.loopVideos[index] = {
+                ...taskForm.loopVideos[index],
+                path: result.output_video_path,
+                timestamp: timestamp
+              }
+            }
+          }
+
+          faceAnalysisLoading.value[videoPath] = false
+          return
         }
-      } else if (type === 'ending') {
-        // 创建新对象，避免引用问题
-        taskForm.endingVideo = {
-          ...taskForm.endingVideo,
-          path: analysisResult.output_video_path,
-          timestamp: timestamp
+
+        if (status === 'failed') {
+          ElMessage.error('面部分析失败: ' + (error || '未知错误'))
+          faceAnalysisLoading.value[videoPath] = false
+          return
         }
-      } else if (type === 'loop') {
-        // 创建新对象，避免引用问题
-        taskForm.loopVideos[index] = {
-          ...taskForm.loopVideos[index],
-          path: analysisResult.output_video_path,
-          timestamp: timestamp
+
+        if (status === 'cancelled') {
+          ElMessage.info('面部分析已取消')
+          faceAnalysisLoading.value[videoPath] = false
+          return
+        }
+
+        // 更新进度提示
+        if (progress > 0 && i % 10 === 0) {
+          ElMessage.info(`面部分析进行中... ${Math.round(progress * 100)}%`)
         }
       }
+    } catch (pollError) {
+      console.error('状态轮询错误:', pollError)
     }
-    
-    ElMessage.success('面部分析完成')
-  } catch (error) {
-    console.error('面部分析错误:', error)
-    ElMessage.error('面部分析失败: ' + error.message)
+
+    // 等待下一次轮询
+    await new Promise(resolve => setTimeout(resolve, pollInterval))
   }
+
+  ElMessage.warning('面部分析超时，请稍后查看结果')
+  faceAnalysisLoading.value[videoPath] = false
 }
 
 // 生成文案

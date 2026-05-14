@@ -1,6 +1,7 @@
 """
 HeyGem 兼容的面部检测模块
 使用与 HeyGem 相同的 SCRFD 模型进行面部检测
+支持 WHENet 头部姿态估计
 """
 
 import os
@@ -16,11 +17,11 @@ logger = logging.getLogger(__name__)
 # 添加 HeyGem 路径到 sys.path
 # 当前文件: business/preprocess/heygem_face_detector.py
 # 项目根目录: D:/AI/AUTOavantar
-# HeyGem 目录: D:/AI/AUTOavantar/Portrait
+# HeyGem 目录: D:/AI/AUTOavantar/engines/heygem
 _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_CURRENT_DIR)  # business
 _PROJECT_ROOT = os.path.dirname(_PROJECT_ROOT)  # AUTOavantar (项目根)
-HEYGEM_PATH = os.path.join(_PROJECT_ROOT, "Portrait")
+HEYGEM_PATH = os.path.join(_PROJECT_ROOT, "engines", "heygem")
 
 if HEYGEM_PATH not in sys.path:
     sys.path.insert(0, HEYGEM_PATH)
@@ -73,7 +74,9 @@ class HeyGemFaceDetector:
         self.use_gpu = use_gpu
         self.input_size = input_size
         self.detector = None
+        self.head_pose_estimator = None
         self._init_detector()
+        self._init_head_pose_estimator()
 
     def _check_cuda_available(self) -> bool:
         """
@@ -153,6 +156,31 @@ class HeyGemFaceDetector:
             logger.error(f"SCRFD 初始化失败: {e}")
             self.detector = None
 
+    def _init_head_pose_estimator(self):
+        """初始化 WHENet 头部姿态估计器"""
+        try:
+            from face_detect_utils.head_pose import Headpose
+
+            # 查找 WHENet 模型文件
+            whenet_path = os.path.join(HEYGEM_PATH, "face_detect_utils", "resources", "model_float32.onnx")
+
+            if not os.path.exists(whenet_path):
+                logger.warning(f"WHENet 模型文件不存在: {whenet_path}")
+                return
+
+            logger.info(f"加载 WHENet 头部姿态模型: {whenet_path}")
+
+            # 使用与 SCRFD 相同的 GPU 设置
+            self.head_pose_estimator = Headpose(cpu=not self.use_gpu, onnx_path=whenet_path)
+            logger.info("WHENet 头部姿态估计器初始化成功")
+
+        except ImportError as e:
+            logger.warning(f"无法导入 Headpose: {e}")
+            self.head_pose_estimator = None
+        except Exception as e:
+            logger.warning(f"WHENet 初始化失败: {e}")
+            self.head_pose_estimator = None
+
     def detect_faces(
         self,
         image: np.ndarray,
@@ -220,6 +248,52 @@ class HeyGemFaceDetector:
         except Exception as e:
             logger.error(f"面部检测失败: {e}")
             return []
+
+    def get_head_pose(
+        self,
+        image: np.ndarray,
+        bbox: Optional[List[float]] = None
+    ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        """
+        使用 WHENet 计算头部姿态
+
+        Args:
+            image: 输入图像 (BGR 格式)
+            bbox: 人脸边界框 [x1, y1, x2, y2, score]，可选
+
+        Returns:
+            (pitch, roll, yaw) 头部姿态角度（度），计算失败返回 (None, None, None)
+        """
+        if self.head_pose_estimator is None:
+            return None, None, None
+
+        if image is None or image.size == 0:
+            return None, None, None
+
+        try:
+            # 如果提供了边界框，裁剪人脸区域
+            if bbox is not None and len(bbox) >= 4:
+                x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+                # 添加边距
+                margin = 0.2
+                w = x2 - x1
+                h = y2 - y1
+                x1 = max(0, int(x1 - w * margin))
+                y1 = max(0, int(y1 - h * margin))
+                x2 = min(image.shape[1], int(x2 + w * margin))
+                y2 = min(image.shape[0], int(y2 + h * margin))
+                face_img = image[y1:y2, x1:x2]
+            else:
+                face_img = image
+
+            # 使用 WHENet 计算头部姿态
+            pitch, roll, yaw = self.head_pose_estimator.get_head_pose(face_img)
+
+            return pitch, roll, yaw
+
+        except Exception as e:
+            logger.debug(f"头部姿态计算失败: {e}")
+            return None, None, None
 
     def align_face(
         self,

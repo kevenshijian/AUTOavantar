@@ -414,11 +414,36 @@ class VideoPreprocessor:
                             [landmarks_5[3][0], landmarks_5[3][1]],  # 右嘴角
                         ]
 
-                        # 使用 5 点关键点计算头部姿态
-                        validation = self._validate_face_with_5_points(result.landmarks_5, frame.shape)
+                        # 调试日志：输出关键点坐标
+                        # logger.debug(
+                        #     f"帧 {frame_idx} SCRFD 关键点: "
+                        #     f"左眼({landmarks_5[1][0]:.1f}, {landmarks_5[1][1]:.1f}), "
+                        #     f"右眼({landmarks_5[0][0]:.1f}, {landmarks_5[0][1]:.1f}), "
+                        #     f"鼻尖({landmarks_5[2][0]:.1f}, {landmarks_5[2][1]:.1f}), "
+                        #     f"左嘴角({landmarks_5[4][0]:.1f}, {landmarks_5[4][1]:.1f}), "
+                        #     f"右嘴角({landmarks_5[3][0]:.1f}, {landmarks_5[3][1]:.1f})"
+                        # )
+
+                        # 使用 WHENet 计算头部姿态（更准确）
+                        if self.face_detector.head_pose_estimator is not None:
+                            pitch, roll, yaw = self.face_detector.get_head_pose(frame, heygem_result.bbox)
+                            validation = self._validate_face_with_head_pose(
+                                result.landmarks_5, frame.shape, yaw, pitch
+                            )
+                        else:
+                            # 回退到 5 点关键点计算
+                            validation = self._validate_face_with_5_points(result.landmarks_5, frame.shape)
+
                         result.is_valid = validation['is_valid']
                         result.yaw_angle = validation['yaw']
                         result.pitch_angle = validation['pitch']
+
+                        # 调试日志：输出验证结果
+                        if not validation['is_valid']:
+                            logger.debug(f"帧 {frame_idx} 验证失败: {validation['reasons']}, yaw={validation['yaw']:.1f}°, pitch={validation['pitch']:.1f}°")
+                        else:
+                            logger.debug(f"帧 {frame_idx} 验证通过: yaw={validation['yaw']:.1f}°, pitch={validation['pitch']:.1f}°")
+
                         if not validation['is_valid']:
                             result.reason = ", ".join(validation['reasons'])
                     else:
@@ -729,7 +754,7 @@ class VideoPreprocessor:
         frame_shape: Tuple[int, int, int]
     ) -> Dict[str, Any]:
         """
-        使用 5 点关键点验证面部有效性
+        使用 5 点关键点验证面部有效性（回退方案，当 WHENet 不可用时使用）
 
         Args:
             landmarks_5: 5 点关键点 [[左眼], [右眼], [鼻尖], [左嘴角], [右嘴角]]
@@ -779,13 +804,172 @@ class VideoPreprocessor:
             'pitch': pitch
         }
 
+    def _validate_face_with_head_pose(
+        self,
+        landmarks_5: List[List[float]],
+        frame_shape: Tuple[int, int, int],
+        yaw: Optional[float],
+        pitch: Optional[float]
+    ) -> Dict[str, Any]:
+        """
+        使用 WHENet 计算的头部姿态验证面部有效性
+
+        Args:
+            landmarks_5: 5 点关键点 [[左眼], [右眼], [鼻尖], [左嘴角], [右嘴角]]
+            frame_shape: 帧形状 (h, w, c)
+            yaw: WHENet 计算的偏航角
+            pitch: WHENet 计算的俯仰角
+
+        Returns:
+            {'is_valid': bool, 'reasons': List[str], 'yaw': float, 'pitch': float}
+        """
+        reasons = []
+
+        if landmarks_5 is None or len(landmarks_5) != 5:
+            return {'is_valid': False, 'reasons': ['关键点不可用'], 'yaw': None, 'pitch': None}
+
+        h, w = frame_shape[:2]
+
+        # 检查嘴角是否可见
+        left_mouth = landmarks_5[3]   # 左嘴角
+        right_mouth = landmarks_5[4]  # 右嘴角
+
+        if left_mouth[0] <= 0 or left_mouth[1] <= 0:
+            reasons.append("左嘴角不可见")
+        if right_mouth[0] <= 0 or right_mouth[1] <= 0:
+            reasons.append("右嘴角不可见")
+
+        # 检查鼻尖是否可见
+        nose = landmarks_5[2]
+        if nose[0] <= 0 or nose[1] <= 0:
+            reasons.append("鼻尖不可见")
+
+        # 使用 WHENet 计算的角度
+        if yaw is None or pitch is None:
+            reasons.append("无法计算头部姿态")
+        else:
+            if abs(yaw) > self.YAW_THRESHOLD:
+                reasons.append(f"偏航角过大({yaw:.1f}°)")
+            if abs(pitch) > self.PITCH_THRESHOLD:
+                reasons.append(f"俯仰角过大({pitch:.1f}°)")
+
+        return {
+            'is_valid': len(reasons) == 0,
+            'reasons': reasons,
+            'yaw': yaw,
+            'pitch': pitch
+        }
+
     def _calculate_head_pose_from_5_points(
         self,
         landmarks_5: List[List[float]],
         frame_shape: Tuple[int, int, int]
     ) -> Tuple[Optional[float], Optional[float]]:
         """
-        使用 5 点关键点计算头部姿态
+        使用 5 点关键点计算头部姿态（使用 solvePnP 精确计算）
+
+        参考 HeyGem 的标准 5 点模型进行计算。
+
+        Args:
+            landmarks_5: 5 点关键点 [[左眼], [右眼], [鼻尖], [左嘴角], [右嘴角]]
+            frame_shape: 帧形状 (h, w, c)
+
+        Returns:
+            (yaw, pitch) 偏航角和俯仰角
+        """
+        try:
+            h, w = frame_shape[:2]
+
+            # 提取关键点（像素坐标）
+            left_eye = np.array(landmarks_5[0])
+            right_eye = np.array(landmarks_5[1])
+            nose = np.array(landmarks_5[2])
+            left_mouth = np.array(landmarks_5[3])
+            right_mouth = np.array(landmarks_5[4])
+
+            # 计算面部尺寸（用于归一化 3D 模型）
+            eye_width = np.linalg.norm(right_eye - left_eye)
+            face_height = np.linalg.norm(nose - (left_eye + right_eye) / 2)
+
+            if eye_width < 10 or face_height < 10:
+                # 面部太小，无法准确计算
+                return self._calculate_head_pose_simple(landmarks_5, frame_shape)
+
+            # 3D 模型点（基于标准面部比例）
+            # 使用眼宽作为基准单位，其他特征按比例缩放
+            # 坐标系：原点在鼻尖，X 向右，Y 向上，Z 向前
+            scale = eye_width / 64.0  # 标准眼宽约 64 单位
+
+            model_points = np.array([
+                (0.0, 0.0, 0.0),              # 鼻尖 (原点)
+                (-32.0 * scale, 40.0 * scale, -26.0 * scale),   # 左眼
+                (32.0 * scale, 40.0 * scale, -26.0 * scale),    # 右眼
+                (-22.0 * scale, -30.0 * scale, -20.0 * scale),   # 左嘴角
+                (22.0 * scale, -30.0 * scale, -20.0 * scale),    # 右嘴角
+            ], dtype=np.float64)
+
+            # 2D 图像点（注意：图像坐标系 Y 轴向下）
+            image_points = np.array([
+                (nose[0], nose[1]),
+                (left_eye[0], left_eye[1]),
+                (right_eye[0], right_eye[1]),
+                (left_mouth[0], left_mouth[1]),
+                (right_mouth[0], right_mouth[1]),
+            ], dtype=np.float64)
+
+            # 相机内参矩阵
+            focal_length = w
+            camera_matrix = np.array([
+                [focal_length, 0, w / 2],
+                [0, focal_length, h / 2],
+                [0, 0, 1]
+            ], dtype=np.float64)
+
+            # 畸变系数（假设无畸变）
+            dist_coeffs = np.zeros((4, 1))
+
+            # 使用 solvePnP 求解姿态
+            success, rotation_vector, _ = cv2.solvePnP(
+                model_points, image_points, camera_matrix, dist_coeffs,
+                flags=cv2.SOLVEPNP_EPNP
+            )
+
+            if not success:
+                # 回退到简化估算
+                return self._calculate_head_pose_simple(landmarks_5, frame_shape)
+
+            # 将旋转向量转换为旋转矩阵
+            rotation_mat, _ = cv2.Rodrigues(rotation_vector)
+
+            # 从旋转矩阵提取欧拉角
+            proj_matrix = np.hstack((rotation_mat, np.zeros((3, 1))))
+            _, _, _, _, _, _, euler_angles = cv2.decomposeProjectionMatrix(proj_matrix)
+
+            yaw_deg = float(euler_angles[1][0])
+            pitch_deg = float(euler_angles[0][0])
+
+            # 角度归一化
+            if pitch_deg > 90:
+                pitch_deg = pitch_deg - 180
+            elif pitch_deg < -90:
+                pitch_deg = pitch_deg + 180
+            if yaw_deg > 180:
+                yaw_deg = yaw_deg - 360
+
+            return yaw_deg, pitch_deg
+
+        except Exception as e:
+            logger.debug(f"计算头部姿态失败: {e}")
+            # 回退到简化估算
+            return self._calculate_head_pose_simple(landmarks_5, frame_shape)
+
+    def _calculate_head_pose_simple(
+        self,
+        landmarks_5: List[List[float]],
+        frame_shape: Tuple[int, int, int]
+    ) -> Tuple[Optional[float], Optional[float]]:
+        """
+        简化的头部姿态估算（作为 solvePnP 失败时的回退方案）
 
         Args:
             landmarks_5: 5 点关键点 [[左眼], [右眼], [鼻尖], [左嘴角], [右嘴角]]
@@ -824,7 +1008,7 @@ class VideoPreprocessor:
             return yaw, pitch
 
         except Exception as e:
-            logger.debug(f"计算头部姿态失败: {e}")
+            logger.debug(f"简化姿态估算失败: {e}")
             return None, None
 
     def extract_valid_frames(
