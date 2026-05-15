@@ -53,10 +53,14 @@ class VideoPreprocessResult:
     resolution: Tuple[int, int]
     is_qualified: bool = True
     reasons: List[str] = None
+    sample_interval: int = 1
+    deleted_ranges: List[Tuple[int, int]] = None
 
     def __post_init__(self):
         if self.reasons is None:
             self.reasons = []
+        if self.deleted_ranges is None:
+            self.deleted_ranges = []
 
 
 class VideoPreprocessor:
@@ -145,6 +149,74 @@ class VideoPreprocessor:
             self.mp_face_mesh = None
             self.detector_type = "opencv_haar"
 
+    def _merge_invalid_ranges(
+        self,
+        invalid_sample_indices: List[int],
+        sample_interval: int,
+        total_frames: int
+    ) -> List[Tuple[int, int]]:
+        """
+        将不合格采样帧索引转换为删除区间并合并
+
+        每个不合格帧生成 [frame - interval, frame + interval] 区间，
+        然后合并重叠/相邻区间。
+
+        Args:
+            invalid_sample_indices: 不合格的采样帧索引列表
+            sample_interval: 采样间隔
+            total_frames: 总帧数
+
+        Returns:
+            合并后的删除区间列表 [(start, end), ...]
+        """
+        if not invalid_sample_indices:
+            return []
+
+        # 每个不合格帧生成删除区间
+        ranges = []
+        for idx in invalid_sample_indices:
+            start = max(0, idx - sample_interval)
+            end = min(total_frames - 1, idx + sample_interval)
+            ranges.append((start, end))
+
+        # 按起点排序
+        ranges.sort(key=lambda x: x[0])
+
+        # 合并重叠/相邻区间
+        merged = [ranges[0]]
+        for start, end in ranges[1:]:
+            last_start, last_end = merged[-1]
+            if start <= last_end + 1:
+                merged[-1] = (last_start, max(last_end, end))
+            else:
+                merged.append((start, end))
+
+        return merged
+
+    def _calculate_valid_frame_indices(
+        self,
+        total_frames: int,
+        deleted_ranges: List[Tuple[int, int]]
+    ) -> List[int]:
+        """
+        计算不在删除区间内的有效帧索引列表
+
+        Args:
+            total_frames: 总帧数
+            deleted_ranges: 删除区间列表 [(start, end), ...]
+
+        Returns:
+            有效帧索引列表
+        """
+        if not deleted_ranges:
+            return list(range(total_frames))
+
+        deleted_set = set()
+        for start, end in deleted_ranges:
+            deleted_set.update(range(start, end + 1))
+
+        return [i for i in range(total_frames) if i not in deleted_set]
+
     def _get_video_rotation(self, video_path: str) -> int:
         """
         获取视频的旋转角度
@@ -204,12 +276,14 @@ class VideoPreprocessor:
 
         return frame
 
-    def detect_faces(self, video_path: str) -> VideoPreprocessResult:
+    def detect_faces(self, video_path: str, sample_interval: int = 5) -> VideoPreprocessResult:
         """
-        检测视频中的面部
+        检测视频中的面部（支持采样间隔分析）
 
         Args:
             video_path: 视频文件路径
+            sample_interval: 采样间隔，默认5（每5帧分析一次）
+                             间隔=1时等同于逐帧分析
 
         Returns:
             预处理结果
@@ -235,63 +309,90 @@ class VideoPreprocessor:
 
         logger.info(
             f"开始处理视频: {video_path}, "
-            f"总帧数: {total_frames}, FPS: {fps}, 分辨率: {width}x{height}, 旋转: {rotation}°"
+            f"总帧数: {total_frames}, FPS: {fps}, 分辨率: {width}x{height}, "
+            f"旋转: {rotation}°, 采样间隔: {sample_interval}"
         )
 
+        # 采样分析：按间隔遍历帧
         frame_results: List[FaceDetectionResult] = []
-        valid_frame_indices: List[int] = []
+        invalid_sample_indices: List[int] = []
+        sample_count = 0
 
-        frame_idx = 0
-        while True:
+        for frame_idx in range(0, total_frames, sample_interval):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
+
             if not ret:
-                break
+                logger.warning(f"无法读取帧 {frame_idx}")
+                continue
 
             # 应用旋转
             frame = self._rotate_frame(frame, rotation)
 
             # 检测当前帧
             result = self._detect_face_in_frame(frame, frame_idx)
-
-            if result.is_valid:
-                valid_frame_indices.append(frame_idx)
-
             frame_results.append(result)
-            frame_idx += 1
+            sample_count += 1
+
+            if not result.is_valid:
+                invalid_sample_indices.append(frame_idx)
 
             # 进度日志
-            if frame_idx % 100 == 0:
-                logger.debug(f"已处理 {frame_idx}/{total_frames} 帧")
+            if sample_count % 10 == 0:
+                logger.debug(f"已分析 {sample_count} 个采样帧")
 
         cap.release()
 
-        # 统计结果
-        valid_frames = len(valid_frame_indices)
-        invalid_frames = total_frames - valid_frames
-        is_qualified = valid_frames > 0 and (valid_frames / total_frames) > 0.5
+        logger.info(
+            f"采样分析完成: 共分析 {sample_count} 帧 (间隔={sample_interval}), "
+            f"不合格采样帧 {len(invalid_sample_indices)} 个"
+        )
+
+        # 计算删除区间
+        deleted_ranges = self._merge_invalid_ranges(
+            invalid_sample_indices=invalid_sample_indices,
+            sample_interval=sample_interval,
+            total_frames=total_frames
+        )
+
+        # 计算有效帧索引
+        valid_frame_indices = self._calculate_valid_frame_indices(
+            total_frames=total_frames,
+            deleted_ranges=deleted_ranges
+        )
+
+        # 计算合格率
+        deleted_frame_count = sum(end - start + 1 for start, end in deleted_ranges)
+        valid_frame_count = len(valid_frame_indices)
+        invalid_frame_count = total_frames - valid_frame_count
+
+        qualified_rate = valid_frame_count / total_frames if total_frames > 0 else 0
+        is_qualified = valid_frame_count > 0 and qualified_rate > 0.5
 
         reasons = []
-        if invalid_frames > total_frames * 0.5:
+        if invalid_frame_count > total_frames * 0.5:
             reasons.append("有效帧数不足 50%")
-        if valid_frames == 0:
+        if valid_frame_count == 0:
             reasons.append("未检测到有效人脸")
 
         result = VideoPreprocessResult(
             video_path=video_path,
             total_frames=total_frames,
-            valid_frames=valid_frames,
-            invalid_frames=invalid_frames,
+            valid_frames=valid_frame_count,
+            invalid_frames=invalid_frame_count,
             frame_results=frame_results,
             valid_frame_paths=valid_frame_indices,
             duration=duration,
             fps=fps,
             resolution=(width, height),
             is_qualified=is_qualified,
-            reasons=reasons
+            reasons=reasons,
+            sample_interval=sample_interval,
+            deleted_ranges=deleted_ranges
         )
 
         logger.info(
-            f"视频预处理完成: 有效帧 {valid_frames}/{total_frames}, "
+            f"视频预处理完成: 有效帧 {valid_frame_count}/{total_frames} ({qualified_rate:.1%}), "
             f"是否合格: {is_qualified}"
         )
 
@@ -318,6 +419,7 @@ class VideoPreprocessor:
         else:
             result = detect_result
         valid_frame_indices = result.valid_frame_paths
+        valid_frame_set = set(valid_frame_indices)
 
         if not valid_frame_indices:
             logger.warning("没有有效帧，无法处理视频")
@@ -352,7 +454,7 @@ class VideoPreprocessor:
             frame = self._rotate_frame(frame, rotation)
 
             # 只写入有效帧
-            if frame_idx in valid_frame_indices:
+            if frame_idx in valid_frame_set:
                 out.write(frame)
 
             frame_idx += 1
@@ -1154,7 +1256,7 @@ class HeyGemVideoValidator:
 
         preprocess_result = self.preprocessor.detect_faces(video_path)
 
-        valid_frames = 0
+        valid_frames = preprocess_result.valid_frames
         size_issues = 0
 
         h, w = preprocess_result.resolution
@@ -1168,9 +1270,6 @@ class HeyGemVideoValidator:
             if (face_width_ratio < self.MIN_FACE_WIDTH_RATIO or
                 face_width_ratio > self.MAX_FACE_WIDTH_RATIO):
                 size_issues += 1
-
-            if frame_result.is_valid:
-                valid_frames += 1
 
         total_frames = preprocess_result.total_frames
         valid_ratio = valid_frames / total_frames if total_frames > 0 else 0
