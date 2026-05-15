@@ -227,8 +227,8 @@
               <div class="video-preview" v-if="createForm.opening_video">
                 <video :src="getFileUrl(createForm.opening_video)" controls />
                 <div class="video-actions">
-                  <el-button size="small" @click="analyzeFace(createForm.opening_video, 'opening')" :loading="faceAnalysisLoading[createForm.opening_video] && faceAnalysisLoading[createForm.opening_video] !== 'completed'" :disabled="faceAnalysisLoading[createForm.opening_video] || analyzedVideoPaths[createForm.opening_video]">
-                    <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[createForm.opening_video] || analyzedVideoPaths[createForm.opening_video] ? '分析中...' : '面部分析' }}
+                  <el-button size="small" @click="analyzeFace(createForm.opening_video, 'opening')" :loading="faceAnalysisLoading[createForm.opening_video] && faceAnalysisLoading[createForm.opening_video] !== 'completed'" :disabled="(faceAnalysisLoading[createForm.opening_video] && faceAnalysisLoading[createForm.opening_video] !== 'completed') || analyzedVideoPaths[createForm.opening_video]">
+                    <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[createForm.opening_video] === 'completed' ? '已完成' : (faceAnalysisLoading[createForm.opening_video] || analyzedVideoPaths[createForm.opening_video] ? '分析中...' : '面部分析') }}
                   </el-button>
                   <el-button size="small" type="danger" @click="removeVideo('opening')">
                     <el-icon><Delete /></el-icon>
@@ -265,8 +265,8 @@
                     </el-select>
                   </div>
                   <div class="video-actions">
-                    <el-button size="small" @click="analyzeFace(video.path, 'loop')" :loading="faceAnalysisLoading[video.path] && faceAnalysisLoading[video.path] !== 'completed'" :disabled="faceAnalysisLoading[video.path] || analyzedVideoPaths[video.path]">
-                      <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[video.path] || analyzedVideoPaths[video.path] ? '分析中...' : '面部分析' }}
+                    <el-button size="small" @click="analyzeFace(video.path, 'loop')" :loading="faceAnalysisLoading[video.path] && faceAnalysisLoading[video.path] !== 'completed'" :disabled="(faceAnalysisLoading[video.path] && faceAnalysisLoading[video.path] !== 'completed') || analyzedVideoPaths[video.path]">
+                      <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[video.path] === 'completed' ? '已完成' : (faceAnalysisLoading[video.path] || analyzedVideoPaths[video.path] ? '分析中...' : '面部分析') }}
                     </el-button>
                     <el-button size="small" type="danger" @click="removeLoopVideo(index)">
                       <el-icon><Delete /></el-icon>
@@ -287,8 +287,8 @@
               <div class="video-preview" v-if="createForm.ending_video">
                 <video :src="getFileUrl(createForm.ending_video)" controls />
                 <div class="video-actions">
-                  <el-button size="small" @click="analyzeFace(createForm.ending_video, 'ending')" :loading="faceAnalysisLoading[createForm.ending_video] && faceAnalysisLoading[createForm.ending_video] !== 'completed'" :disabled="faceAnalysisLoading[createForm.ending_video] || analyzedVideoPaths[createForm.ending_video]">
-                    <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[createForm.ending_video] || analyzedVideoPaths[createForm.ending_video] ? '分析中...' : '面部分析' }}
+                  <el-button size="small" @click="analyzeFace(createForm.ending_video, 'ending')" :loading="faceAnalysisLoading[createForm.ending_video] && faceAnalysisLoading[createForm.ending_video] !== 'completed'" :disabled="(faceAnalysisLoading[createForm.ending_video] && faceAnalysisLoading[createForm.ending_video] !== 'completed') || analyzedVideoPaths[createForm.ending_video]">
+                    <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[createForm.ending_video] === 'completed' ? '已完成' : (faceAnalysisLoading[createForm.ending_video] || analyzedVideoPaths[createForm.ending_video] ? '分析中...' : '面部分析') }}
                   </el-button>
                   <el-button size="small" type="danger" @click="removeVideo('ending')">
                     <el-icon><Delete /></el-icon>

@@ -53,8 +53,8 @@
                     </div>
                   </div>
                   <div class="video-actions">
-                    <el-button type="primary" link @click="analyzeFace('opening')" :loading="faceAnalysisLoading[taskForm.openingVideo?.path] && faceAnalysisLoading[taskForm.openingVideo?.path] !== 'completed'" :disabled="faceAnalysisLoading[taskForm.openingVideo?.path] || analyzedVideoPaths[taskForm.openingVideo?.path]">
-                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[taskForm.openingVideo?.path] || analyzedVideoPaths[taskForm.openingVideo?.path] ? '分析中...' : '面部分析' }}
+                    <el-button type="primary" link @click="analyzeFace('opening')" :loading="faceAnalysisLoading[taskForm.openingVideo?.path] && faceAnalysisLoading[taskForm.openingVideo?.path] !== 'completed'" :disabled="(faceAnalysisLoading[taskForm.openingVideo?.path] && faceAnalysisLoading[taskForm.openingVideo?.path] !== 'completed') || analyzedVideoPaths[taskForm.openingVideo?.path]">
+                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[taskForm.openingVideo?.path] === 'completed' ? '已完成' : (faceAnalysisLoading[taskForm.openingVideo?.path] || analyzedVideoPaths[taskForm.openingVideo?.path] ? '分析中...' : '面部分析') }}
                     </el-button>
                     <el-button type="danger" link @click="removeVideo('opening')">
                       <el-icon><Delete /></el-icon> 移除
@@ -95,8 +95,8 @@
                       <el-option label="惊喜" value="surprised" />
                       <el-option label="冷静" value="calm" />
                     </el-select>
-                    <el-button type="primary" link @click="analyzeFace('loop', index)" :loading="faceAnalysisLoading[video?.path] && faceAnalysisLoading[video?.path] !== 'completed'" :disabled="faceAnalysisLoading[video?.path] || analyzedVideoPaths[video?.path]">
-                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[video?.path] || analyzedVideoPaths[video?.path] ? '分析中...' : '面部分析' }}
+                    <el-button type="primary" link @click="analyzeFace('loop', index)" :loading="faceAnalysisLoading[video?.path] && faceAnalysisLoading[video?.path] !== 'completed'" :disabled="(faceAnalysisLoading[video?.path] && faceAnalysisLoading[video?.path] !== 'completed') || analyzedVideoPaths[video?.path]">
+                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[video?.path] === 'completed' ? '已完成' : (faceAnalysisLoading[video?.path] || analyzedVideoPaths[video?.path] ? '分析中...' : '面部分析') }}
                     </el-button>
                     <el-button type="danger" link @click="removeLoopVideo(index)">
                       <el-icon><Delete /></el-icon> 移除
@@ -123,8 +123,8 @@
                     </div>
                   </div>
                   <div class="video-actions">
-                    <el-button type="primary" link @click="analyzeFace('ending')" :loading="faceAnalysisLoading[taskForm.endingVideo?.path] && faceAnalysisLoading[taskForm.endingVideo?.path] !== 'completed'" :disabled="faceAnalysisLoading[taskForm.endingVideo?.path] || analyzedVideoPaths[taskForm.endingVideo?.path]">
-                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[taskForm.endingVideo?.path] || analyzedVideoPaths[taskForm.endingVideo?.path] ? '分析中...' : '面部分析' }}
+                    <el-button type="primary" link @click="analyzeFace('ending')" :loading="faceAnalysisLoading[taskForm.endingVideo?.path] && faceAnalysisLoading[taskForm.endingVideo?.path] !== 'completed'" :disabled="(faceAnalysisLoading[taskForm.endingVideo?.path] && faceAnalysisLoading[taskForm.endingVideo?.path] !== 'completed') || analyzedVideoPaths[taskForm.endingVideo?.path]">
+                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[taskForm.endingVideo?.path] === 'completed' ? '已完成' : (faceAnalysisLoading[taskForm.endingVideo?.path] || analyzedVideoPaths[taskForm.endingVideo?.path] ? '分析中...' : '面部分析') }}
                     </el-button>
                     <el-button type="danger" link @click="removeVideo('ending')">
                       <el-icon><Delete /></el-icon> 移除

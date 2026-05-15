@@ -397,7 +397,7 @@ async def analyze_face(request: FaceAnalysisRequest):
 # 异步面部分析接口 → AC-227, AC-230
 # ============================================================================
 
-async def run_face_analysis_task(task_id: str, video_path: str):
+def run_face_analysis_task(task_id: str, video_path: str):
     """
     后台执行面部分析任务 → AC-227
 
