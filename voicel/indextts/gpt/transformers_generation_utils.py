@@ -30,7 +30,7 @@ from transformers.cache_utils import (
     DynamicCache,
     EncoderDecoderCache,
     OffloadedCache,
-    QuantizedCacheConfig,
+    QuantizedCache,
     StaticCache,
 )
 from transformers.configuration_utils import PretrainedConfig
@@ -60,8 +60,9 @@ from transformers.generation.candidate_generator import (
     _prepare_token_type_ids,
 )
 from transformers.generation.configuration_utils import (
-    NEED_SETUP_CACHE_CLASSES_MAPPING,
-    QUANT_BACKEND_CLASSES_MAPPING,
+    ALL_STATIC_CACHE_IMPLEMENTATIONS,
+    DEPRECATED_STATIC_CACHE_IMPLEMENTATIONS,
+    STATIC_CACHE_IMPLEMENTATIONS,
     GenerationConfig,
     GenerationMode,
 )
@@ -1561,24 +1562,20 @@ class GenerationMixin:
 
         Returns the resulting cache object.
         """
-        cache_cls: Cache = NEED_SETUP_CACHE_CLASSES_MAPPING[cache_implementation]
         requires_cross_attention_cache = (
             self.config.is_encoder_decoder or model_kwargs.get("encoder_outputs") is not None
         )
+        offload_cache = "offloaded" in cache_implementation
 
         if hasattr(self, "_cache"):
             cache_to_check = self._cache.self_attention_cache if requires_cross_attention_cache else self._cache
 
-        if cache_implementation == "sliding_window":
-            max_cache_len = min(self.config.sliding_window, max_cache_len)
-
         need_new_cache = (
             not hasattr(self, "_cache")
-            or (not isinstance(cache_to_check, cache_cls))
-            or cache_to_check.batch_size != batch_size
+            or cache_to_check.offloading != offload_cache
+            or cache_to_check.max_batch_size != batch_size
+            or cache_to_check.max_cache_len < max_cache_len
         )
-        if cache_implementation != "mamba":
-            need_new_cache = need_new_cache or cache_to_check.max_cache_len < max_cache_len
 
         if requires_cross_attention_cache and hasattr(self, "_cache"):
             need_new_cache = (
@@ -1587,58 +1584,19 @@ class GenerationMixin:
             )
 
         if need_new_cache:
-            if hasattr(self.config, "_pre_quantization_dtype"):
-                cache_dtype = self.config._pre_quantization_dtype
-            else:
-                if not is_torchdynamo_compiling():
-                    cache_dtype = self.dtype
-                else:
-                    # NOTE: self.dtype is not compatible with torch.compile, as it calls `self.parameters()`.
-                    # Workaround: trust the lm_head, whose attribute name is somewhat consistent across generative
-                    # models. May cause trobles with non-text modalities.
-                    cache_dtype = self.get_output_embeddings().weight.dtype
-
-            def get_layer_device_map(execution_device_map: Optional[dict] = None):
-                if execution_device_map is None:
-                    return None
-                elif len(execution_device_map) == 1 and "" in execution_device_map:
-                    return {idx: execution_device_map[""] for idx in range(self.config.num_hidden_layers)}
-                layer_device_map = {}
-                for layer in execution_device_map:
-                    for idx in range(self.config.num_hidden_layers):
-                        if f".{idx}." in f"{layer}.":
-                            layer_device_map[idx] = execution_device_map[layer]
-                            break
-                for idx in range(self.config.num_hidden_layers):
-                    if idx not in layer_device_map:
-                        raise RuntimeError(f"layer {idx} has not been mapped to a device.")
-                return layer_device_map
-
-            execution_device_map = None
-            # Taken from dispatch_model from accelerate.
-            # This is needed here if we don't want to make changes in accelerate in order to save execution_device
-            # For offloaded case, we need to get the execution device, not just the device where it is offloaded
-            if hasattr(self, "hf_device_map"):
-                main_device = [d for d in self.hf_device_map.values() if d not in ["cpu", "disk"]][0]
-                execution_device_map = {
-                    name: main_device if device in ["cpu", "disk"] else device
-                    for name, device in self.hf_device_map.items()
-                }
-            layer_device_map = get_layer_device_map(execution_device_map)
-
-            cache_kwargs = {
-                "config": self.config.get_text_config(),
-                "batch_size": batch_size,
+            self_attention_cache_kwargs = {
+                "config": self.config.get_text_config(decoder=True),
                 "max_cache_len": max_cache_len,
-                "device": device,
-                "dtype": cache_dtype,
-                "layer_device_map": layer_device_map,
+                "offloading": offload_cache,
             }
-            self._cache = cache_cls(**cache_kwargs)
+            self._cache = StaticCache(**self_attention_cache_kwargs)
             if requires_cross_attention_cache:
-                encoder_kwargs = cache_kwargs.copy()
-                encoder_kwargs["max_cache_len"] = model_kwargs["encoder_outputs"][0].shape[1]
-                self._cache = EncoderDecoderCache(self._cache, cache_cls(**encoder_kwargs))
+                cross_attention_cache_kwargs = {
+                    "config": self.config.get_text_config(decoder=True),
+                    "max_cache_len": model_kwargs["encoder_outputs"][0].shape[1],
+                    "offloading": offload_cache,
+                }
+                self._cache = EncoderDecoderCache(self._cache, StaticCache(**cross_attention_cache_kwargs))
         else:
             self._cache.reset()
         return self._cache
@@ -1722,7 +1680,7 @@ class GenerationMixin:
             generation_config.cache_implementation = None
 
         if generation_config.cache_implementation is not None:
-            if generation_config.cache_implementation in NEED_SETUP_CACHE_CLASSES_MAPPING:
+            if generation_config.cache_implementation in ALL_STATIC_CACHE_IMPLEMENTATIONS:
                 if generation_config.cache_implementation == "static" and not self._supports_static_cache:
                     raise ValueError(
                         "This model does not support `cache_implementation='static'`. Please check the following "
@@ -1745,23 +1703,26 @@ class GenerationMixin:
                 cache_config = (
                     generation_config.cache_config
                     if generation_config.cache_config is not None
-                    else QuantizedCacheConfig()
+                    else {}
                 )
-                cache_class = QUANT_BACKEND_CLASSES_MAPPING[cache_config.backend]
+                # Add the config if it was not provided, as it's a required argument
+                if "config" not in cache_config:
+                    cache_config["config"] = self.config.get_text_config()
+                # Pop the backend from the config (defaults to quanto if not defined)
+                backend = cache_config.pop("backend", "quanto")
 
-                # if cache_config.backend == "quanto" and not (is_optimum_quanto_available() or is_quanto_available()):
-                if cache_config.backend == "quanto" and not is_optimum_quanto_available():
+                if backend == "quanto" and not is_optimum_quanto_available():
                     raise ImportError(
                         "You need to install optimum-quanto in order to use KV cache quantization with optimum-quanto backend. "
                         "Please install it via  with `pip install optimum-quanto`"
                     )
-                elif cache_config.backend == "HQQ" and not is_hqq_available():
+                elif backend == "HQQ" and not is_hqq_available():
                     raise ImportError(
                         "You need to install `HQQ` in order to use KV cache quantization with HQQ backend. "
                         "Please install it via  with `pip install hqq`"
                     )
 
-                model_kwargs[cache_name] = cache_class(cache_config)
+                model_kwargs[cache_name] = QuantizedCache(backend=backend, **cache_config)
             elif generation_config.cache_implementation == "offloaded":
                 model_kwargs[cache_name] = OffloadedCache()
 

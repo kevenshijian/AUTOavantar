@@ -5,9 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import transformers
-from transformers import GPT2Config, LogitsProcessorList
+from transformers import GPT2Config, LogitsProcessorList, GenerationMixin
 from indextts.gpt.transformers_gpt2 import GPT2PreTrainedModel, GPT2Model
-from indextts.gpt.transformers_generation_utils import GenerationMixin
 
 # from transformers import GPT2Config, GPT2PreTrainedModel, LogitsProcessorList
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions

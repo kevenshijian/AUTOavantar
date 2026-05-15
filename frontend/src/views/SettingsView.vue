@@ -444,7 +444,7 @@ const handleUltraLowMemoryChange = async (value) => {
 // 更新精准字幕
 const handlePreciseSubtitleChange = async (value) => {
   try {
-    await settingsApi.updateDefaultParams({ enable_precise_subtitle: value })
+    await systemApi.updateConfig({ enable_precise_subtitle: value })
     ElMessage.success(`精准字幕已${value ? '开启' : '关闭'}`)
   } catch (error) {
     ElMessage.error(`更新失败：${error.response?.data?.detail || error.message}`)

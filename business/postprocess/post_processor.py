@@ -1132,8 +1132,11 @@ class PostProcessor:
         """
         try:
             from business.postprocess.precise_subtitle_generator import generate_precise_subtitle
+            import os
 
-            model_path = "D:/AI/AUTOavantar/models/Qwen3-ForcedAligner-0.6B"
+            # 使用项目根目录的相对路径
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            model_path = os.path.join(project_root, "models", "Qwen3-ForcedAligner-0.6B")
 
             srt_path = generate_precise_subtitle(
                 video_path=video_path,

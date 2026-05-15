@@ -1,12 +1,6 @@
 dual_mode: false
-heygem_inference_steps: 5
+enable_precise_subtitle: true
+heygem_inference_steps: 16
 heygem_original: true
-tts_emo_weight: 0.5
+tts_emo_weight: 0.4
 tts_speed: 1.0
-# 超低显存模式：启用延迟加载 + CPU 卸载策略
-# 当 True 时，显存占用约 5-5.5GB（适合 ≤6GB 显存的显卡）
-# 当 False 时，显存占用约 8GB（默认，适合 ≥8GB 显存的显卡）
-ultra_low_memory: false
-# 精准字幕功能：使用 Qwen3-ForcedAligner 强制对齐生成字幕时间轴
-# 依赖：ultra_low_memory=false（超低显存模式关闭时才能启用）
-enable_precise_subtitle: false
