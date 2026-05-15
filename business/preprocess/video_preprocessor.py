@@ -47,7 +47,7 @@ class VideoPreprocessResult:
     valid_frames: int
     invalid_frames: int
     frame_results: List[FaceDetectionResult]
-    valid_frame_paths: List[str]
+    valid_frame_paths: List[int]
     duration: float
     fps: float
     resolution: Tuple[int, int]
