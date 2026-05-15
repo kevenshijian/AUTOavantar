@@ -13,7 +13,7 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 import subprocess
 
@@ -31,6 +31,10 @@ router = APIRouter()
 # 异步面部分析任务存储 → AC-227
 # ============================================================================
 face_analysis_tasks: Dict[str, Dict] = {}
+# 视频路径级别的防护锁：记录正在分析中的视频路径，防止重复分析
+face_analysis_video_locks: Dict[str, str] = {}  # {视频完整路径: task_id}
+# 视频路径级别的已完成记录：记录最近完成分析的视频路径及完成时间，防止5分钟内重复分析
+face_analysis_completed_cache: Dict[str, datetime] = {}  # {视频完整路径: 完成时间}
 
 
 def cleanup_expired_face_analysis_tasks(max_age_hours: int = 2):
@@ -51,11 +55,27 @@ def cleanup_expired_face_analysis_tasks(max_age_hours: int = 2):
                 expired_task_ids.append(task_id)
 
     for task_id in expired_task_ids:
+        task = face_analysis_tasks.get(task_id)
+        if task:
+            # 同时清理对应的视频锁
+            video_path = task.get("video_path")
+            if video_path and face_analysis_video_locks.get(video_path) == task_id:
+                del face_analysis_video_locks[video_path]
         del face_analysis_tasks[task_id]
         logger.info(f"清理过期面部分析任务: {task_id}")
 
     if expired_task_ids:
         logger.info(f"已清理 {len(expired_task_ids)} 个过期任务")
+
+    # 清理过期的已完成缓存（超过5分钟的条目）
+    expired_cache_keys = [
+        path for path, completed_at in face_analysis_completed_cache.items()
+        if (now - completed_at).total_seconds() > 300
+    ]
+    for key in expired_cache_keys:
+        del face_analysis_completed_cache[key]
+    if expired_cache_keys:
+        logger.info(f"已清理 {len(expired_cache_keys)} 个过期已完成缓存")
 
 
 class FaceAnalysisRequest(BaseModel):
@@ -459,6 +479,9 @@ async def run_face_analysis_task(task_id: str, video_path: str):
             "message": f"分析完成，已移除 {invalid_count} 段不合格画面"
         }
 
+        # 记录到已完成缓存，防止5分钟内重复分析
+        face_analysis_completed_cache[video_path] = datetime.now()
+
         logger.info(f"面部分析任务 {task_id} 完成")
 
     except Exception as e:
@@ -469,52 +492,97 @@ async def run_face_analysis_task(task_id: str, video_path: str):
         logger.error(f"面部分析任务 {task_id} 失败: {e}")
         task["status"] = "failed"
         task["error"] = str(e)
+        # 失败也记录到缓存，防止短时间内反复重试同一失败视频
+        face_analysis_completed_cache[video_path] = datetime.now()
+    finally:
+        # 释放视频锁（无论成功、失败还是取消）
+        face_analysis_video_locks.pop(video_path, None)
 
 
 @router.post("/face-analysis-async", response_model=FaceAnalysisAsyncResponse)
 async def analyze_face_async(
-    request: FaceAnalysisAsyncRequest,
-    background_tasks: BackgroundTasks
+    body: FaceAnalysisAsyncRequest,
+    background_tasks: BackgroundTasks,
+    request: Request = None
 ):
     """
     异步面部分析接口 → AC-227
 
     立即返回 task_id，分析在后台执行
     """
-    video_path = request.video_path
+    video_path = body.video_path
 
-    # 构建完整的视频路径（处理相对路径）
+    # 记录请求来源
+    client_info = f"{request.client.host}:{request.client.port}" if request and request.client else "unknown"
+    logger.info(f"收到面部分析请求: video_path={video_path}, client={client_info}")
+
+    # 构建完整的视频路径（处理相对路径），并规范化确保同一文件映射到同一 key
     backend_root = Path(__file__).resolve().parent.parent.parent
     full_video_path = video_path
     if not os.path.isabs(video_path):
         full_video_path = str(backend_root / video_path.replace("\\", "/"))
+    full_video_path = os.path.normpath(os.path.abspath(full_video_path))
 
     if not os.path.exists(full_video_path):
         raise HTTPException(status_code=400, detail=f"视频文件不存在: {video_path}")
 
+    # 防护检查：同一视频不允许重复分析
+    # 1. 检查是否有正在分析中的任务
+    existing_task_id = face_analysis_video_locks.get(full_video_path)
+    if existing_task_id:
+        existing_task = face_analysis_tasks.get(existing_task_id)
+        if existing_task and existing_task["status"] in ("pending", "running"):
+            logger.warning(f"拒绝重复面部分析请求: 视频 {full_video_path} 已有进行中的任务 {existing_task_id}")
+            raise HTTPException(
+                status_code=409,
+                detail=f"该视频正在分析中（任务 {existing_task_id[:8]}...），请等待完成"
+            )
+        # 任务已完成/失败/取消，清理旧锁
+        del face_analysis_video_locks[full_video_path]
+
+    # 2. 检查是否有最近完成的任务（5分钟内）— O(1) 缓存查找
+    completed_at = face_analysis_completed_cache.get(full_video_path)
+    if completed_at:
+        if (datetime.now() - completed_at).total_seconds() < 300:
+            logger.warning(f"拒绝重复面部分析请求: 视频 {full_video_path} 已在 {completed_at} 完成分析")
+            raise HTTPException(
+                status_code=409,
+                detail="该视频已完成面部分析，无需重复分析"
+            )
+        # 过期条目，惰性清理
+        del face_analysis_completed_cache[full_video_path]
+
     # 生成任务 ID
     task_id = str(uuid.uuid4())
 
-    # 初始化任务状态
-    face_analysis_tasks[task_id] = {
-        "task_id": task_id,
-        "video_path": full_video_path,  # 使用完整路径
-        "original_path": video_path,    # 保存原始路径用于返回
-        "status": "pending",
-        "progress": 0.0,
-        "result": None,
-        "error": None,
-        "created_at": datetime.now()
-    }
+    # 加锁：标记该视频正在分析
+    face_analysis_video_locks[full_video_path] = task_id
 
-    # 添加后台任务
-    background_tasks.add_task(
-        run_face_analysis_task,
-        task_id=task_id,
-        video_path=full_video_path  # 使用完整路径
-    )
+    try:
+        # 初始化任务状态
+        face_analysis_tasks[task_id] = {
+            "task_id": task_id,
+            "video_path": full_video_path,  # 使用完整路径
+            "original_path": video_path,    # 保存原始路径用于返回
+            "status": "pending",
+            "progress": 0.0,
+            "result": None,
+            "error": None,
+            "created_at": datetime.now()
+        }
 
-    logger.info(f"创建异步面部分析任务: {task_id}")
+        # 添加后台任务
+        background_tasks.add_task(
+            run_face_analysis_task,
+            task_id=task_id,
+            video_path=full_video_path  # 使用完整路径
+        )
+    except Exception:
+        # 任务初始化或后台任务添加失败时，释放锁避免永久阻塞
+        face_analysis_video_locks.pop(full_video_path, None)
+        raise
+
+    logger.info(f"创建异步面部分析任务: {task_id}, 视频: {full_video_path}")
 
     return FaceAnalysisAsyncResponse(task_id=task_id, status="pending")
 

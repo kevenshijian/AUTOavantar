@@ -227,7 +227,7 @@
               <div class="video-preview" v-if="createForm.opening_video">
                 <video :src="getFileUrl(createForm.opening_video)" controls />
                 <div class="video-actions">
-                  <el-button size="small" @click="analyzeFace(createForm.opening_video, 'opening')" :loading="faceAnalysisLoading[createForm.opening_video]" :disabled="faceAnalysisLoading[createForm.opening_video] || analyzedVideoPaths[createForm.opening_video]">
+                  <el-button size="small" @click="analyzeFace(createForm.opening_video, 'opening')" :loading="faceAnalysisLoading[createForm.opening_video] && faceAnalysisLoading[createForm.opening_video] !== 'completed'" :disabled="faceAnalysisLoading[createForm.opening_video] || analyzedVideoPaths[createForm.opening_video]">
                     <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[createForm.opening_video] || analyzedVideoPaths[createForm.opening_video] ? '分析中...' : '面部分析' }}
                   </el-button>
                   <el-button size="small" type="danger" @click="removeVideo('opening')">
@@ -265,7 +265,7 @@
                     </el-select>
                   </div>
                   <div class="video-actions">
-                    <el-button size="small" @click="analyzeFace(video.path, 'loop')" :loading="faceAnalysisLoading[video.path]" :disabled="faceAnalysisLoading[video.path] || analyzedVideoPaths[video.path]">
+                    <el-button size="small" @click="analyzeFace(video.path, 'loop')" :loading="faceAnalysisLoading[video.path] && faceAnalysisLoading[video.path] !== 'completed'" :disabled="faceAnalysisLoading[video.path] || analyzedVideoPaths[video.path]">
                       <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[video.path] || analyzedVideoPaths[video.path] ? '分析中...' : '面部分析' }}
                     </el-button>
                     <el-button size="small" type="danger" @click="removeLoopVideo(index)">
@@ -287,7 +287,7 @@
               <div class="video-preview" v-if="createForm.ending_video">
                 <video :src="getFileUrl(createForm.ending_video)" controls />
                 <div class="video-actions">
-                  <el-button size="small" @click="analyzeFace(createForm.ending_video, 'ending')" :loading="faceAnalysisLoading[createForm.ending_video]" :disabled="faceAnalysisLoading[createForm.ending_video] || analyzedVideoPaths[createForm.ending_video]">
+                  <el-button size="small" @click="analyzeFace(createForm.ending_video, 'ending')" :loading="faceAnalysisLoading[createForm.ending_video] && faceAnalysisLoading[createForm.ending_video] !== 'completed'" :disabled="faceAnalysisLoading[createForm.ending_video] || analyzedVideoPaths[createForm.ending_video]">
                     <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[createForm.ending_video] || analyzedVideoPaths[createForm.ending_video] ? '分析中...' : '面部分析' }}
                   </el-button>
                   <el-button size="small" type="danger" @click="removeVideo('ending')">
@@ -664,6 +664,13 @@ const playingAudioId = ref(null)  // 当前播放的音频ID
 const faceAnalysisLoading = reactive({})  // 面部分析加载状态 → AC-228
 const pollingTaskIds = reactive({})  // 正在轮询的任务 ID，用于防止重复调用
 const analyzedVideoPaths = reactive({})  // 已完成分析的视频路径，用于防止重复分析（使用对象而非 Set，因为 Vue 3 的 reactive 对 Set 的支持有限）
+
+// 标记视频已分析的辅助函数（确保响应式更新）
+const markVideoAsAnalyzed = (videoPath) => {
+  analyzedVideoPaths[videoPath] = true
+  console.log('[markVideoAsAnalyzed] 已标记路径:', videoPath)
+  console.log('[markVideoAsAnalyzed] analyzedVideoPaths 当前内容:', JSON.stringify(analyzedVideoPaths))
+}
 
 // 设置音频元素引用
 const setAudioRef = (el, id) => {
@@ -1320,31 +1327,35 @@ const handleAudioCanPlay = (event, index) => {
 }
 
 const analyzeFace = async (videoPath, type) => {
+  console.log('[MaterialListView][analyzeFace] 调用，路径:', videoPath, '类型:', type)
+
   // 检查是否已经在分析中或已完成分析
   if (faceAnalysisLoading[videoPath] || pollingTaskIds[videoPath]) {
-    console.log('视频已在分析中，跳过:', videoPath)
+    console.log('[MaterialListView][analyzeFace] 视频已在分析中，跳过:', videoPath)
     ElMessage.warning('该视频正在分析中，请等待完成')
     return
   }
 
   // 检查是否已经分析过（防止重复分析）
   if (analyzedVideoPaths[videoPath]) {
-    console.log('视频已完成分析，跳过:', videoPath)
+    console.log('[MaterialListView][analyzeFace] 视频已完成分析，跳过:', videoPath)
     ElMessage.info('该视频已完成面部分析')
     return
   }
 
-  // 设置加载状态 → AC-228
+  // 立即设置防护状态，防止在 await 期间被再次调用
   faceAnalysisLoading[videoPath] = true
+  pollingTaskIds[videoPath] = 'pending'
 
   try {
     // 调用异步 API → AC-227
     const response = await taskApi.analyzeFaceAsync(videoPath)
+    console.log('[MaterialListView][analyzeFace] 异步面部分析启动:', response)
 
     if (response.code === 200 || response.task_id) {
       const taskId = response.task_id || response.data?.task_id
 
-      // 记录正在轮询的任务
+      // 更新为真实的 task_id
       pollingTaskIds[videoPath] = taskId
 
       // 轮询状态 → AC-227
@@ -1355,10 +1366,27 @@ const analyzeFace = async (videoPath, type) => {
     } else {
       ElMessage.error('面部分析启动失败: ' + (response.message || '未知错误'))
       faceAnalysisLoading[videoPath] = false
+      delete pollingTaskIds[videoPath]
     }
   } catch (error) {
-    ElMessage.error('面部分析失败: ' + (error.message || '未知错误'))
-    faceAnalysisLoading[videoPath] = false
+    console.error('[MaterialListView][analyzeFace] 面部分析失败:', error)
+    // 后端返回 409 表示重复请求，根据 detail 区分处理
+    if (error.response?.status === 409) {
+      const detail = error.response?.data?.detail || ''
+      if (detail.includes('正在分析中')) {
+        // 正在分析中：保持 loading 状态，不恢复按钮
+        faceAnalysisLoading[videoPath] = true
+      } else {
+        // 已完成分析：标记为已完成
+        markVideoAsAnalyzed(videoPath)
+        faceAnalysisLoading[videoPath] = 'completed'
+      }
+      console.warn('[MaterialListView][analyzeFace] 后端拒绝重复分析:', detail)
+    } else {
+      ElMessage.error('面部分析失败: ' + (error.message || '未知错误'))
+      faceAnalysisLoading[videoPath] = false
+      delete pollingTaskIds[videoPath]
+    }
   }
 }
 
@@ -1378,15 +1406,20 @@ const pollFaceAnalysisStatus = async (taskId, videoPath, type) => {
         const error = response.error || response.data?.error
 
         if (status === 'completed') {
+          console.log('[MaterialListView][轮询] 检测到完成，路径:', videoPath)
+
+          // 立即设置为"已完成"状态，防止在标记 analyzedVideoPaths 之前被再次调用
+          faceAnalysisLoading[videoPath] = 'completed'
+
           ElMessage.success(`面部分析完成，已移除 ${result?.invalid_frame_count || 0} 段不合格画面`)
 
           // 标记该视频已完成分析，防止重复分析
-          analyzedVideoPaths[videoPath] = true
+          markVideoAsAnalyzed(videoPath)
 
           // 视频已原地替换，不需要更新路径
           // 视频预览会通过 URL 参数自动刷新
 
-          faceAnalysisLoading[videoPath] = false
+          // 保持 completed 状态，不清除，让按钮保持禁用
           return
         }
 
