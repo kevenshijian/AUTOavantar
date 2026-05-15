@@ -532,71 +532,34 @@ class PostProcessor:
                 logger.info("没有文本内容，跳过字幕生成")
                 return None
 
-            # 使用统一精确字幕同步器
-            from business.postprocess.unified_subtitle_synchronizer import UnifiedSubtitleSynchronizer
+            # 检查是否启用精准字幕
+            use_precise = self._should_use_precise_subtitle()
 
-            synchronizer = UnifiedSubtitleSynchronizer(
-                padding_ms=100,      # 字幕提前 100ms 显示
-                buffer_ms=100,      # 段落末尾缓冲
-                overlap_ms=20,      # 字幕重叠，避免闪烁
-            )
+            if use_precise:
+                logger.info("使用精准字幕生成模式")
+                current_srt_path = self._generate_precise_subtitle(
+                    video_path=video_path,
+                    segments_text=segments_text,
+                    output_srt_path=srt_path
+                )
+                if not current_srt_path:
+                    logger.warning("精准字幕失败，回退到默认字幕")
+                    use_precise = False
 
-            success = synchronizer.synchronize(
-                segments_text=segments_text,
-                segment_durations=segment_durations,
-                segment_offsets=segment_offsets,
-                output_srt_path=srt_path,
-            )
+            if not use_precise:
+                # 使用默认字幕生成
+                current_srt_path = self._generate_default_subtitle(
+                    segments_text=segments_text,
+                    segment_durations=segment_durations,
+                    segment_offsets=segment_offsets,
+                    output_srt_path=srt_path,
+                    task=task
+                )
 
-            if not success:
-                logger.warning("精确字幕同步失败，使用备用方法")
-                # 备用方法
-                subtitle_index = 1
-                accumulated_time = 0.0
-
-                with open(srt_path, 'w', encoding='utf-8') as f:
-                    for segment in task.segments:
-                        if not segment.text:
-                            continue
-
-                        segment_duration = getattr(segment, 'duration', 0.0)
-                        if segment_duration <= 0:
-                            segment_duration = 2.0
-
-                        sentences = self._split_text_to_sentences(segment.text)
-
-                        if not sentences:
-                            continue
-
-                        num_sentences = len(sentences)
-                        total_chars = sum(len(s) for s in sentences)
-
-                        available_duration = segment_duration * 0.95
-
-                        for sentence in sentences:
-                            if total_chars > 0:
-                                sentence_duration = available_duration * (len(sentence) / total_chars)
-                            else:
-                                sentence_duration = available_duration / num_sentences
-
-                            if sentence_duration < 0.8:
-                                sentence_duration = 0.8
-
-                            start_time = accumulated_time - 0.08
-                            if start_time < 0:
-                                start_time = 0.0
-                            end_time = accumulated_time + sentence_duration
-
-                            f.write(f"{subtitle_index}\n")
-                            f.write(f"{self._format_srt_time(start_time)} --> {self._format_srt_time(end_time)}\n")
-                            f.write(f"{sentence}\n\n")
-
-                            subtitle_index += 1
-                            accumulated_time += sentence_duration
-
-            logger.info(f"字幕生成成功: {srt_path}")
-
-            current_srt_path = srt_path
+            if not current_srt_path:
+                logger.warning("字幕生成失败")
+                return None
+            logger.info(f"字幕生成成功：{current_srt_path}")
 
             # 烧录字幕到视频
             output_path = video_path.replace(".mp4", "_subtitled.mp4")
@@ -1100,22 +1063,212 @@ class PostProcessor:
     def _generate_cover_prompt(self, task: Task) -> str:
         """
         生成封面提示词
-        
+
         Args:
             task: 任务对象
-            
+
         Returns:
             封面提示词
         """
         # 基于文案内容生成简单的提示词
         texts = [seg.text for seg in task.segments if seg.text]
         main_text = " ".join(texts[:3]) if texts else "数字人视频"
-        
+
         # 构建提示词
         prompt = f"高质量封面，专业摄影，{main_text}，清晰人脸，电影级别光效，4K 高清"
-        
+
         logger.debug(f"封面提示词：{prompt}")
         return prompt
+
+    def _should_use_precise_subtitle(self) -> bool:
+        """
+        判断是否应该使用精准字幕
+
+        检查系统配置中的 enable_precise_subtitle 设置
+        同时检查 ultra_low_memory 模式是否关闭（精准字幕需要较多显存）
+
+        Returns:
+            bool: 是否使用精准字幕
+        """
+        try:
+            from core.system_config import get_config_manager
+            config_manager = get_config_manager()
+
+            # 检查超低显存模式
+            ultra_low_memory = config_manager.get_ultra_low_memory()
+            if ultra_low_memory:
+                logger.info("超低显存模式开启，无法使用精准字幕")
+                return False
+
+            # 检查精准字幕开关
+            enable_precise_subtitle = config_manager.get_enable_precise_subtitle()
+            if enable_precise_subtitle:
+                logger.info("精准字幕功能已启用")
+                return True
+
+            logger.info("精准字幕功能未启用，使用默认字幕")
+            return False
+
+        except Exception as e:
+            logger.error(f"检查精准字幕配置失败：{e}")
+            return False
+
+    def _generate_precise_subtitle(
+        self,
+        video_path: str,
+        segments_text: List[str],
+        output_srt_path: str
+    ) -> Optional[str]:
+        """
+        使用 Qwen3-ForcedAligner 生成精准字幕
+
+        Args:
+            video_path: 视频路径
+            segments_text: 分段文本列表
+            output_srt_path: 输出 SRT 文件路径
+
+        Returns:
+            SRT 文件路径，失败返回 None
+        """
+        try:
+            from business.postprocess.precise_subtitle_generator import generate_precise_subtitle
+
+            model_path = "D:/AI/AUTOavantar/models/Qwen3-ForcedAligner-0.6B"
+
+            srt_path = generate_precise_subtitle(
+                video_path=video_path,
+                segments_text=segments_text,
+                output_srt_path=output_srt_path,
+                model_path=model_path
+            )
+
+            return srt_path
+
+        except Exception as e:
+            logger.error(f"精准字幕生成失败：{e}")
+            return None
+
+    def _generate_default_subtitle(
+        self,
+        segments_text: List[str],
+        segment_durations: List[float],
+        segment_offsets: List[float],
+        output_srt_path: str,
+        task: Task
+    ) -> Optional[str]:
+        """
+        使用 UnifiedSubtitleSynchronizer 生成默认字幕
+
+        Args:
+            segments_text: 分段文本列表
+            segment_durations: 分段时长列表
+            segment_offsets: 分段偏移列表
+            output_srt_path: 输出 SRT 文件路径
+            task: 任务对象
+
+        Returns:
+            SRT 文件路径，失败返回 None
+        """
+        try:
+            # 使用统一精确字幕同步器
+            from business.postprocess.unified_subtitle_synchronizer import UnifiedSubtitleSynchronizer
+
+            synchronizer = UnifiedSubtitleSynchronizer(
+                padding_ms=100,      # 字幕提前 100ms 显示
+                buffer_ms=100,      # 段落末尾缓冲
+                overlap_ms=20,      # 字幕重叠，避免闪烁
+            )
+
+            success = synchronizer.synchronize(
+                segments_text=segments_text,
+                segment_durations=segment_durations,
+                segment_offsets=segment_offsets,
+                output_srt_path=output_srt_path,
+            )
+
+            if not success:
+                logger.warning("精确字幕同步失败，使用备用方法")
+                # 备用方法：基于时长分配
+                return self._generate_subtitle_fallback(
+                    segments_text=segments_text,
+                    segment_durations=segment_durations,
+                    segment_offsets=segment_offsets,
+                    output_srt_path=output_srt_path,
+                    task=task
+                )
+
+            return output_srt_path
+
+        except Exception as e:
+            logger.error(f"默认字幕生成失败：{e}")
+            return None
+
+    def _generate_subtitle_fallback(
+        self,
+        segments_text: List[str],
+        segment_durations: List[float],
+        segment_offsets: List[float],
+        output_srt_path: str,
+        task: Task
+    ) -> Optional[str]:
+        """
+        备用字幕生成方法（基于时长分配）
+
+        Args:
+            segments_text: 分段文本列表
+            segment_durations: 分段时长列表
+            segment_offsets: 分段偏移列表
+            output_srt_path: 输出 SRT 文件路径
+            task: 任务对象
+
+        Returns:
+            SRT 文件路径
+        """
+        # 备用方法
+        subtitle_index = 1
+        accumulated_time = 0.0
+
+        with open(output_srt_path, 'w', encoding='utf-8') as f:
+            for segment in task.segments:
+                if not segment.text:
+                    continue
+
+                segment_duration = getattr(segment, 'duration', 0.0)
+                if segment_duration <= 0:
+                    segment_duration = 2.0
+
+                sentences = self._split_text_to_sentences(segment.text)
+
+                if not sentences:
+                    continue
+
+                num_sentences = len(sentences)
+                total_chars = sum(len(s) for s in sentences)
+
+                available_duration = segment_duration * 0.95
+
+                for sentence in sentences:
+                    if total_chars > 0:
+                        sentence_duration = available_duration * (len(sentence) / total_chars)
+                    else:
+                        sentence_duration = available_duration / num_sentences
+
+                    if sentence_duration < 0.8:
+                        sentence_duration = 0.8
+
+                    start_time = accumulated_time - 0.08
+                    if start_time < 0:
+                        start_time = 0.0
+                    end_time = accumulated_time + sentence_duration
+
+                    f.write(f"{subtitle_index}\n")
+                    f.write(f"{self._format_srt_time(start_time)} --> {self._format_srt_time(end_time)}\n")
+                    f.write(f"{sentence}\n\n")
+
+                    subtitle_index += 1
+                    accumulated_time += sentence_duration
+
+        return output_srt_path
 
 
 def create_post_processor(

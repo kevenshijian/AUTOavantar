@@ -7,3 +7,6 @@ tts_speed: 1.0
 # 当 True 时，显存占用约 5-5.5GB（适合 ≤6GB 显存的显卡）
 # 当 False 时，显存占用约 8GB（默认，适合 ≥8GB 显存的显卡）
 ultra_low_memory: false
+# 精准字幕功能：使用 Qwen3-ForcedAligner 强制对齐生成字幕时间轴
+# 依赖：ultra_low_memory=false（超低显存模式关闭时才能启用）
+enable_precise_subtitle: false

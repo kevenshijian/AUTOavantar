@@ -18,12 +18,14 @@ class SystemConfig:
     """系统配置数据类"""
     low_memory_mode: bool = False  # 低显存模式，默认关闭
     ultra_low_memory: bool = False  # 超低显存模式，默认关闭
+    enable_precise_subtitle: bool = False  # 精准字幕功能，默认关闭
 
     def to_dict(self) -> dict:
         """序列化为字典"""
         return {
             "low_memory_mode": self.low_memory_mode,
-            "ultra_low_memory": self.ultra_low_memory
+            "ultra_low_memory": self.ultra_low_memory,
+            "enable_precise_subtitle": self.enable_precise_subtitle
         }
 
     @classmethod
@@ -31,7 +33,8 @@ class SystemConfig:
         """从字典反序列化"""
         return cls(
             low_memory_mode=data.get("low_memory_mode", False),
-            ultra_low_memory=data.get("ultra_low_memory", False)
+            ultra_low_memory=data.get("ultra_low_memory", False),
+            enable_precise_subtitle=data.get("enable_precise_subtitle", False)
         )
 
 
@@ -162,6 +165,36 @@ class SystemConfigManager:
             if self._config is None:
                 self.load()
             return self._config.ultra_low_memory
+
+    def set_enable_precise_subtitle(self, enabled: bool) -> bool:
+        """设置精准字幕功能
+
+        Args:
+            enabled: 是否启用精准字幕功能
+
+        Returns:
+            bool: 是否设置成功
+        """
+        with self._lock:
+            if self._config is None:
+                self.load()
+
+            self._config.enable_precise_subtitle = enabled
+            logger.info(f"精准字幕功能已设置为：{enabled}")
+
+        # 自动保存
+        return self.save()
+
+    def get_enable_precise_subtitle(self) -> bool:
+        """获取精准字幕功能
+
+        Returns:
+            bool: 是否启用精准字幕功能
+        """
+        with self._lock:
+            if self._config is None:
+                self.load()
+            return self._config.enable_precise_subtitle
 
 
 # 全局配置管理器实例（单例模式）

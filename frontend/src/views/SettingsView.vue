@@ -205,6 +205,20 @@
               <span class="form-hint">开启后启用双人对话模式</span>
             </el-form-item>
 
+            <el-form-item label="精准字幕" class="full-width">
+              <el-switch
+                v-model="settingsStore.settings.enable_precise_subtitle"
+                :disabled="ultraLowMemory"
+                @change="handlePreciseSubtitleChange"
+              />
+              <span class="form-hint">
+                开启后使用 Qwen3-ForcedAligner 强制对齐技术生成精确字幕
+                <el-tag v-if="ultraLowMemory" type="warning" size="small" style="margin-left: 8px">
+                  超低显存模式开启时不可用
+                </el-tag>
+              </span>
+            </el-form-item>
+
             <el-form-item label="HeyGEM 推理批次" class="full-width">
               <el-slider
                 v-model="settingsStore.settings.heygem_inference_steps"
@@ -379,6 +393,8 @@ const fetchSystemConfig = async () => {
     const response = await systemApi.getConfig()
     lowMemoryMode.value = response.low_memory_mode
     ultraLowMemory.value = response.ultra_low_memory || false
+    // 从系统配置中获取精准字幕状态
+    settingsStore.settings.enable_precise_subtitle = response.enable_precise_subtitle || false
   } catch (error) {
     console.error('获取系统配置失败:', error)
   }
@@ -410,6 +426,11 @@ const handleUltraLowMemoryChange = async (value) => {
   try {
     await systemApi.updateConfig({ ultra_low_memory: value })
     ElMessage.success(`超低显存模式已${value ? '开启' : '关闭'}`)
+    // 如果开启超低显存模式，自动关闭精准字幕
+    if (value && settingsStore.settings.enable_precise_subtitle) {
+      settingsStore.settings.enable_precise_subtitle = false
+      await settingsApi.updateDefaultParams({ enable_precise_subtitle: false })
+    }
   } catch (error) {
     ElMessage.error(`更新失败: ${error.response?.data?.detail || error.message}`)
     // 恢复原值
@@ -420,6 +441,18 @@ const handleUltraLowMemoryChange = async (value) => {
 }
 
 // 使用computed获取settings，确保响应式更新
+// 更新精准字幕
+const handlePreciseSubtitleChange = async (value) => {
+  try {
+    await settingsApi.updateDefaultParams({ enable_precise_subtitle: value })
+    ElMessage.success(`精准字幕已${value ? '开启' : '关闭'}`)
+  } catch (error) {
+    ElMessage.error(`更新失败：${error.response?.data?.detail || error.message}`)
+    // 恢复原值
+    await fetchSystemConfig()
+  }
+}
+
 const settings = computed({
   get: () => settingsStore.settings,
   set: (value) => settingsStore.updateSettings(value)
@@ -464,7 +497,8 @@ const saveDefaultParams = async () => {
       heygem_inference_steps: settingsStore.settings.heygem_inference_steps,
       dual_mode: settingsStore.settings.dual_mode,
       tts_speed: settingsStore.settings.tts_speed,
-      tts_emo_weight: settingsStore.settings.tts_emo_weight
+      tts_emo_weight: settingsStore.settings.tts_emo_weight,
+      enable_precise_subtitle: settingsStore.settings.enable_precise_subtitle
     })
     ElMessage.success('默认参数已保存')
   } catch (error) {

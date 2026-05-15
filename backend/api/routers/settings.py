@@ -116,6 +116,7 @@ class DefaultParamsRequest(BaseModel):
     dual_mode: bool = False
     tts_speed: float = 1.0
     tts_emo_weight: float = 0.4
+    enable_precise_subtitle: bool = False
 
 
 class ThemeRequest(BaseModel):
@@ -300,7 +301,8 @@ async def update_default_params(request: DefaultParamsRequest):
             "heygem_inference_steps": request.heygem_inference_steps,
             "dual_mode": request.dual_mode,
             "tts_speed": request.tts_speed,
-            "tts_emo_weight": request.tts_emo_weight
+            "tts_emo_weight": request.tts_emo_weight,
+            "enable_precise_subtitle": request.enable_precise_subtitle
         }
         _save_yaml(_get_default_params_path(), data)
         logger.info("默认参数已保存")
