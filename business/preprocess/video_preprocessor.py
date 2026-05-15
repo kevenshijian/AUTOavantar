@@ -151,6 +151,23 @@ class VideoPreprocessor:
             self.mp_face_mesh = None
             self.detector_type = "opencv_haar"
 
+    def _cleanup_face_detector(self):
+        """卸载面部检测模型，释放 GPU 显存"""
+        if self.detector_type == "heygem_scrfd":
+            if hasattr(self.face_detector, 'cleanup'):
+                self.face_detector.cleanup()
+        elif self.detector_type == "mediapipe":
+            if hasattr(self.face_detector, 'close'):
+                try:
+                    self.face_detector.close()
+                    logger.info("MediaPipe FaceLandmarker 已关闭，GPU 显存已释放")
+                except Exception as e:
+                    logger.warning(f"MediaPipe 卸载失败: {e}")
+        # opencv_haar 无需清理（纯 CPU，无 GPU 占用）
+
+        self.face_detector = None
+        logger.info(f"面部检测器已卸载: {self.detector_type}")
+
     def _merge_invalid_ranges(
         self,
         invalid_sample_indices: List[int],
@@ -295,6 +312,10 @@ class VideoPreprocessor:
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"视频文件不存在: {video_path}")
 
+        # 如果检测器已被卸载，重新初始化
+        if self.face_detector is None:
+            self._init_face_detector()
+
         cap = cv2.VideoCapture(video_path)
 
         # 获取视频旋转角度
@@ -403,6 +424,9 @@ class VideoPreprocessor:
             f"视频预处理完成: 有效帧 {valid_frame_count}/{total_frames} ({qualified_rate:.1%}), "
             f"是否合格: {is_qualified}"
         )
+
+        # 卸载检测模型，释放 GPU 显存
+        self._cleanup_face_detector()
 
         return result
 

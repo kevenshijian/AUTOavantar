@@ -533,16 +533,12 @@ class PostProcessor:
                 return None
 
             # 使用统一精确字幕同步器
-            # 整合了三个同步器的优点：
-            # 1. 使用 TTS 精确时长作为时间基准
-            # 2. 考虑标点类型对停顿的影响
-            # 3. 按权重智能分配时间
             from business.postprocess.unified_subtitle_synchronizer import UnifiedSubtitleSynchronizer
 
             synchronizer = UnifiedSubtitleSynchronizer(
-                padding_ms=80,      # 字幕提前 80ms 显示
+                padding_ms=100,      # 字幕提前 100ms 显示
                 buffer_ms=100,      # 段落末尾缓冲
-                overlap_ms=50,      # 字幕重叠，避免闪烁
+                overlap_ms=20,      # 字幕重叠，避免闪烁
             )
 
             success = synchronizer.synchronize(
