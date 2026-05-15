@@ -44,7 +44,7 @@ def convert_timestamps_to_srt(
 
     Args:
         time_stamps: 字/词级时间戳列表，每个元素包含 text, start_time, end_time
-        full_text: 完整文案文本（可选，用于辅助拆分）
+        full_text: 完整文案文本（预留参数，可用于验证时间戳完整性或辅助拆分）
         max_chars: 每条字幕最大字符数，默认 12
 
     Returns:
