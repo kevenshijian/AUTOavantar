@@ -53,8 +53,8 @@
                     </div>
                   </div>
                   <div class="video-actions">
-                    <el-button type="primary" link @click="analyzeFace('opening')" :loading="faceAnalysisLoading[taskForm.openingVideo?.path]" :disabled="faceAnalysisLoading[taskForm.openingVideo?.path]">
-                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[taskForm.openingVideo?.path] ? '分析中...' : '面部分析' }}
+                    <el-button type="primary" link @click="analyzeFace('opening')" :loading="faceAnalysisLoading[taskForm.openingVideo?.path]" :disabled="faceAnalysisLoading[taskForm.openingVideo?.path] || analyzedVideoPaths[taskForm.openingVideo?.path]">
+                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[taskForm.openingVideo?.path] || analyzedVideoPaths[taskForm.openingVideo?.path] ? '分析中...' : '面部分析' }}
                     </el-button>
                     <el-button type="danger" link @click="removeVideo('opening')">
                       <el-icon><Delete /></el-icon> 移除
@@ -95,8 +95,8 @@
                       <el-option label="惊喜" value="surprised" />
                       <el-option label="冷静" value="calm" />
                     </el-select>
-                    <el-button type="primary" link @click="analyzeFace('loop', index)" :loading="faceAnalysisLoading[video?.path]" :disabled="faceAnalysisLoading[video?.path]">
-                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[video?.path] ? '分析中...' : '面部分析' }}
+                    <el-button type="primary" link @click="analyzeFace('loop', index)" :loading="faceAnalysisLoading[video?.path]" :disabled="faceAnalysisLoading[video?.path] || analyzedVideoPaths[video?.path]">
+                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[video?.path] || analyzedVideoPaths[video?.path] ? '分析中...' : '面部分析' }}
                     </el-button>
                     <el-button type="danger" link @click="removeLoopVideo(index)">
                       <el-icon><Delete /></el-icon> 移除
@@ -123,8 +123,8 @@
                     </div>
                   </div>
                   <div class="video-actions">
-                    <el-button type="primary" link @click="analyzeFace('ending')" :loading="faceAnalysisLoading[taskForm.endingVideo?.path]" :disabled="faceAnalysisLoading[taskForm.endingVideo?.path]">
-                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[taskForm.endingVideo?.path] ? '分析中...' : '面部分析' }}
+                    <el-button type="primary" link @click="analyzeFace('ending')" :loading="faceAnalysisLoading[taskForm.endingVideo?.path]" :disabled="faceAnalysisLoading[taskForm.endingVideo?.path] || analyzedVideoPaths[taskForm.endingVideo?.path]">
+                      <el-icon><Search /></el-icon> {{ faceAnalysisLoading[taskForm.endingVideo?.path] || analyzedVideoPaths[taskForm.endingVideo?.path] ? '分析中...' : '面部分析' }}
                     </el-button>
                     <el-button type="danger" link @click="removeVideo('ending')">
                       <el-icon><Delete /></el-icon> 移除
@@ -1142,8 +1142,8 @@ const denoiseAudio = async (type) => {
 const faceAnalysisLoading = ref({})
 // 正在轮询的任务 ID，用于防止重复调用
 const pollingTaskIds = ref({})
-// 已完成分析的视频路径，用于防止重复分析
-const analyzedVideoPaths = ref(new Set())
+// 已完成分析的视频路径，用于防止重复分析（使用对象而非 Set，因为 Vue 3 的 ref 对 Set 的支持有限）
+const analyzedVideoPaths = ref({})
 
 // 面部分析 - 使用异步接口避免超时重试
 const analyzeFace = async (type, index = 0) => {
@@ -1174,7 +1174,7 @@ const analyzeFace = async (type, index = 0) => {
   }
 
   // 检查是否已经分析过（防止重复分析）
-  if (analyzedVideoPaths.value.has(videoPath)) {
+  if (analyzedVideoPaths.value[videoPath]) {
     console.log('视频已完成分析，跳过:', videoPath)
     ElMessage.info('该视频已完成面部分析')
     return
@@ -1229,7 +1229,7 @@ const pollFaceAnalysisStatus = async (taskId, videoPath, type, index) => {
           ElMessage.success(`面部分析完成，已移除 ${result?.invalid_frame_count || 0} 段不合格画面`)
 
           // 标记该视频已完成分析，防止重复分析
-          analyzedVideoPaths.value.add(videoPath)
+          analyzedVideoPaths.value[videoPath] = true
 
           // 视频已原地替换，只需要刷新时间戳让视频重新加载
           const timestamp = new Date().getTime()

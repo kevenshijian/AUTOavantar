@@ -227,8 +227,8 @@
               <div class="video-preview" v-if="createForm.opening_video">
                 <video :src="getFileUrl(createForm.opening_video)" controls />
                 <div class="video-actions">
-                  <el-button size="small" @click="analyzeFace(createForm.opening_video, 'opening')" :loading="faceAnalysisLoading[createForm.opening_video]" :disabled="faceAnalysisLoading[createForm.opening_video]">
-                    <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[createForm.opening_video] ? '分析中...' : '面部分析' }}
+                  <el-button size="small" @click="analyzeFace(createForm.opening_video, 'opening')" :loading="faceAnalysisLoading[createForm.opening_video]" :disabled="faceAnalysisLoading[createForm.opening_video] || analyzedVideoPaths[createForm.opening_video]">
+                    <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[createForm.opening_video] || analyzedVideoPaths[createForm.opening_video] ? '分析中...' : '面部分析' }}
                   </el-button>
                   <el-button size="small" type="danger" @click="removeVideo('opening')">
                     <el-icon><Delete /></el-icon>
@@ -265,8 +265,8 @@
                     </el-select>
                   </div>
                   <div class="video-actions">
-                    <el-button size="small" @click="analyzeFace(video.path, 'loop')" :loading="faceAnalysisLoading[video.path]" :disabled="faceAnalysisLoading[video.path]">
-                      <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[video.path] ? '分析中...' : '面部分析' }}
+                    <el-button size="small" @click="analyzeFace(video.path, 'loop')" :loading="faceAnalysisLoading[video.path]" :disabled="faceAnalysisLoading[video.path] || analyzedVideoPaths[video.path]">
+                      <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[video.path] || analyzedVideoPaths[video.path] ? '分析中...' : '面部分析' }}
                     </el-button>
                     <el-button size="small" type="danger" @click="removeLoopVideo(index)">
                       <el-icon><Delete /></el-icon>
@@ -287,8 +287,8 @@
               <div class="video-preview" v-if="createForm.ending_video">
                 <video :src="getFileUrl(createForm.ending_video)" controls />
                 <div class="video-actions">
-                  <el-button size="small" @click="analyzeFace(createForm.ending_video, 'ending')" :loading="faceAnalysisLoading[createForm.ending_video]" :disabled="faceAnalysisLoading[createForm.ending_video]">
-                    <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[createForm.ending_video] ? '分析中...' : '面部分析' }}
+                  <el-button size="small" @click="analyzeFace(createForm.ending_video, 'ending')" :loading="faceAnalysisLoading[createForm.ending_video]" :disabled="faceAnalysisLoading[createForm.ending_video] || analyzedVideoPaths[createForm.ending_video]">
+                    <el-icon><Monitor /></el-icon> {{ faceAnalysisLoading[createForm.ending_video] || analyzedVideoPaths[createForm.ending_video] ? '分析中...' : '面部分析' }}
                   </el-button>
                   <el-button size="small" type="danger" @click="removeVideo('ending')">
                     <el-icon><Delete /></el-icon>
@@ -663,7 +663,7 @@ const audioRefs = ref({})  // 存储音频元素引用
 const playingAudioId = ref(null)  // 当前播放的音频ID
 const faceAnalysisLoading = reactive({})  // 面部分析加载状态 → AC-228
 const pollingTaskIds = reactive({})  // 正在轮询的任务 ID，用于防止重复调用
-const analyzedVideoPaths = reactive(new Set())  // 已完成分析的视频路径，用于防止重复分析
+const analyzedVideoPaths = reactive({})  // 已完成分析的视频路径，用于防止重复分析（使用对象而非 Set，因为 Vue 3 的 reactive 对 Set 的支持有限）
 
 // 设置音频元素引用
 const setAudioRef = (el, id) => {
@@ -1328,7 +1328,7 @@ const analyzeFace = async (videoPath, type) => {
   }
 
   // 检查是否已经分析过（防止重复分析）
-  if (analyzedVideoPaths.has(videoPath)) {
+  if (analyzedVideoPaths[videoPath]) {
     console.log('视频已完成分析，跳过:', videoPath)
     ElMessage.info('该视频已完成面部分析')
     return
@@ -1381,7 +1381,7 @@ const pollFaceAnalysisStatus = async (taskId, videoPath, type) => {
           ElMessage.success(`面部分析完成，已移除 ${result?.invalid_frame_count || 0} 段不合格画面`)
 
           // 标记该视频已完成分析，防止重复分析
-          analyzedVideoPaths.add(videoPath)
+          analyzedVideoPaths[videoPath] = true
 
           // 视频已原地替换，不需要更新路径
           // 视频预览会通过 URL 参数自动刷新
