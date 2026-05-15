@@ -72,6 +72,8 @@ class VideoPreprocessor:
     
     YAW_THRESHOLD = 45.0
     PITCH_THRESHOLD = 30.0
+    LONG_VIDEO_THRESHOLD = 300
+    DEFAULT_SAMPLE_INTERVAL = 5
 
     def __init__(
         self,
@@ -276,14 +278,16 @@ class VideoPreprocessor:
 
         return frame
 
-    def detect_faces(self, video_path: str, sample_interval: int = 5) -> VideoPreprocessResult:
+    def detect_faces(self, video_path: str, sample_interval: int = None) -> VideoPreprocessResult:
         """
         检测视频中的面部（支持采样间隔分析）
 
         Args:
             video_path: 视频文件路径
-            sample_interval: 采样间隔，默认5（每5帧分析一次）
-                             间隔=1时等同于逐帧分析
+            sample_interval: 采样间隔，None时自动决定：
+                             总帧数 < 300 → 间隔1（逐帧分析）
+                             总帧数 >= 300 → 间隔5（采样分析）
+                             显式传1时等同于逐帧分析
 
         Returns:
             预处理结果
@@ -302,6 +306,11 @@ class VideoPreprocessor:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         duration = total_frames / fps if fps > 0 else 0
+
+        # 自动决定采样间隔：短视频逐帧，长视频采样
+        if sample_interval is None:
+            sample_interval = 1 if total_frames < self.LONG_VIDEO_THRESHOLD else self.DEFAULT_SAMPLE_INTERVAL
+            logger.info(f"自动选择采样间隔: {sample_interval} (总帧数={total_frames}, 阈值={self.LONG_VIDEO_THRESHOLD})")
 
         # 如果视频需要旋转 90 或 270 度，实际分辨率需要交换
         if rotation in (90, 270):
@@ -362,7 +371,6 @@ class VideoPreprocessor:
         )
 
         # 计算合格率
-        deleted_frame_count = sum(end - start + 1 for start, end in deleted_ranges)
         valid_frame_count = len(valid_frame_indices)
         invalid_frame_count = total_frames - valid_frame_count
 
