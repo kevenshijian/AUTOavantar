@@ -132,11 +132,11 @@ class PreciseSubtitleGenerator:
                 text=full_text,
                 language="Chinese",
             )
-            # ForcedAlignResult 的结构是 items: List[ForcedAlignItem]
-            # ForcedAlignItem 有 text, start_time, end_time 属性
-            if not results or not results.items:
+            # align() 返回 List[ForcedAlignResult]，每个 ForcedAlignResult 有 items 属性
+            # items 是 List[ForcedAlignItem]，每个 ForcedAlignItem 有 text, start_time, end_time
+            if not results or not results[0].items:
                 raise AlignmentError("强制对齐返回空结果")
-            time_stamps = results.items
+            time_stamps = results[0].items
             logger.info(f"强制对齐完成，获得 {len(time_stamps)} 个字/词级时间戳")
         except Exception as e:
             logger.error(f"强制对齐失败：{e}")
