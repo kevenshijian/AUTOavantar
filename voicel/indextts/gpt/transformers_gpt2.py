@@ -304,6 +304,7 @@ class GPT2Attention(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
+        cache_position: Optional[torch.LongTensor] = None,  # transformers 4.57+ 兼容
     ) -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor]], ...]:
         if encoder_hidden_states is not None:
             if not hasattr(self, "q_attn"):
@@ -374,6 +375,7 @@ class GPT2FlashAttention2(GPT2Attention):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
+        cache_position: Optional[torch.LongTensor] = None,  # transformers 4.57+ 兼容
     ) -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor]], ...]:
         bsz, _, _ = hidden_states.size()
         if encoder_hidden_states is not None:
@@ -487,6 +489,7 @@ class GPT2SdpaAttention(GPT2Attention):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
+        cache_position: Optional[torch.LongTensor] = None,  # transformers 4.57+ 兼容
     ) -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor]], ...]:
         if output_attentions or head_mask is not None:
             logger.warning_once(
@@ -615,6 +618,7 @@ class GPT2Block(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
+        cache_position: Optional[torch.LongTensor] = None,  # transformers 4.57+ 兼容
     ) -> Union[Tuple[torch.Tensor], Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]]]:
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
@@ -997,6 +1001,7 @@ class GPT2Model(GPT2PreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,  # transformers 4.57+ 兼容
     ) -> Union[Tuple, BaseModelOutputWithPastAndCrossAttentions]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -1023,11 +1028,25 @@ class GPT2Model(GPT2PreTrainedModel):
         if token_type_ids is not None:
             token_type_ids = token_type_ids.view(-1, input_shape[-1])
 
+        # transformers 4.57+ 兼容：支持新的 Cache 对象和旧的 tuple 格式
         if past_key_values is None:
             past_length = 0
             past_key_values = tuple([None] * len(self.h))
-        else:
+        elif hasattr(past_key_values, 'get_seq_length'):
+            # 新的 Cache 对象格式 (transformers 4.57+)
+            past_length = past_key_values.get_seq_length()
+            # 转换为 legacy tuple 格式以保持兼容
+            # layers 是一个 list，检查其长度
+            if len(past_key_values.layers) > 0:
+                past_key_values = past_key_values.to_legacy_cache()
+            else:
+                past_key_values = tuple([None] * len(self.h))
+        elif isinstance(past_key_values, tuple) and len(past_key_values) > 0 and past_key_values[0] is not None:
+            # 旧的 tuple 格式
             past_length = past_key_values[0][0].size(-2)
+        else:
+            past_length = 0
+            past_key_values = tuple([None] * len(self.h))
         if position_ids is None:
             position_ids = torch.arange(past_length, input_shape[-1] + past_length, dtype=torch.long, device=device)
             position_ids = position_ids.unsqueeze(0)

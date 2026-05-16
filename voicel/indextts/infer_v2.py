@@ -967,6 +967,15 @@ class IndexTTS2:
                                                                    ref_mel, style, None, diffusion_steps,
                                                                    inference_cfg_rate=inference_cfg_rate)
                     vc_target = vc_target[:, :, ref_mel.size(-1):]
+
+                    # 检查 vc_target 是否有效（时间维度必须大于 0）
+                    if vc_target.size(-1) == 0:
+                        print(f">> WARNING: vc_target has zero time dimension after slicing. "
+                              f"vc_target.shape: {vc_target.shape}, ref_mel.size(-1): {ref_mel.size(-1)}, "
+                              f"code_lens: {code_lens}, target_lengths: {target_lengths}")
+                        # 跳过此段落的生成
+                        continue
+
                     s2mel_time += time.perf_counter() - m_start_time
 
                     m_start_time = time.perf_counter()

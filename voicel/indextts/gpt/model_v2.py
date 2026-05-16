@@ -91,8 +91,15 @@ class GPT2InferenceModel(GPT2PreTrainedModel, GenerationMixin):
         token_type_ids = kwargs.get("token_type_ids", None)  # usually None
         if not self.kv_cache:
             past_key_values = None
+
+        # transformers 4.57+ 兼容：支持新的 Cache 对象
+        has_past = past_key_values is not None
+        if has_past and hasattr(past_key_values, 'get_seq_length'):
+            # 新的 Cache 对象格式
+            has_past = past_key_values.get_seq_length() > 0
+
         # only last token for inputs_ids if past is defined in kwargs
-        if past_key_values:
+        if has_past:
             input_ids = input_ids[:, -1].unsqueeze(-1)
             if token_type_ids is not None:
                 token_type_ids = token_type_ids[:, -1].unsqueeze(-1)
@@ -104,7 +111,7 @@ class GPT2InferenceModel(GPT2PreTrainedModel, GenerationMixin):
             # create position_ids on the fly for batch generation
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 0)
-            if past_key_values:
+            if has_past:
                 position_ids = position_ids[:, -1].unsqueeze(-1)
         else:
             position_ids = None
@@ -133,6 +140,7 @@ class GPT2InferenceModel(GPT2PreTrainedModel, GenerationMixin):
             output_attentions=None,
             output_hidden_states=None,
             return_dict=None,
+            cache_position=None,  # transformers 4.57+ 兼容
     ):
         assert self.cached_mel_emb is not None
         assert inputs_embeds is None  # Not supported by this inference model.
