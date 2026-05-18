@@ -53,56 +53,68 @@ def get_workflow_service_or_raise() -> WorkflowService:
     return service
 
 
-def _get_role_double_mode_info(role_id: str) -> Optional[Dict[str, Any]]:
+def _get_role_audio_info(role_id: str) -> Optional[Dict[str, Any]]:
     """
-    获取角色的双人模式信息
-    
+    获取角色的音频信息
+
     Args:
         role_id: 角色ID
-        
+
     Returns:
-        包含 is_double_mode, left_audio_path, right_audio_path 的字典
+        包含 is_double_mode, audio_path, left_audio_path, right_audio_path 的字典
         如果角色不存在返回 None
     """
     try:
         from api.routers.materials import MOCK_ROLES, MOCK_AUDIOS
-        
+
         for role in MOCK_ROLES:
             if role.get("role_id") == role_id:
                 is_double_mode = role.get("is_double_mode", False)
-                
+
                 if is_double_mode:
                     left_audio_id = role.get("left_audio_id")
                     right_audio_id = role.get("right_audio_id")
-                    
+
                     left_audio_path = None
                     right_audio_path = None
-                    
+
                     for audio in MOCK_AUDIOS:
                         if audio.get("id") == left_audio_id:
                             left_audio_path = audio.get("path")
                         if audio.get("id") == right_audio_id:
                             right_audio_path = audio.get("path")
-                    
+
                     logger.info(f"双人角色 {role_id}: left_audio_id={left_audio_id}, right_audio_id={right_audio_id}")
                     logger.info(f"双人角色 {role_id}: left_audio_path={left_audio_path}, right_audio_path={right_audio_path}")
-                    
+
                     return {
                         "is_double_mode": True,
+                        "audio_path": None,
                         "left_audio_path": left_audio_path,
                         "right_audio_path": right_audio_path
                     }
                 else:
+                    # 单人模式
+                    audio_id = role.get("audio_id")
+                    audio_path = None
+
+                    for audio in MOCK_AUDIOS:
+                        if audio.get("id") == audio_id:
+                            audio_path = audio.get("path")
+
+                    logger.info(f"单人角色 {role_id}: audio_id={audio_id}, audio_path={audio_path}")
+
                     return {
                         "is_double_mode": False,
+                        "audio_path": audio_path,
                         "left_audio_path": None,
                         "right_audio_path": None
                     }
-        
+
         logger.warning(f"角色不存在: {role_id}")
         return None
     except Exception as e:
-        logger.warning(f"获取角色双人模式信息失败: {e}")
+        logger.warning(f"获取角色音频信息失败: {e}")
         return None
 
 
@@ -144,15 +156,21 @@ async def create_task(
         prompt_audio_path = request.prompt_audio_path or ""
         
         if request.role_id:
-            role_info = _get_role_double_mode_info(request.role_id)
+            role_info = _get_role_audio_info(request.role_id)
             if role_info:
                 if role_info["is_double_mode"]:
                     enable_double_mode = True
-                    if role_info.get("left_audio_path"):
+                    # 只有当前端没有传递音频路径时，才使用角色绑定的音频
+                    if not left_prompt_audio_path and role_info.get("left_audio_path"):
                         left_prompt_audio_path = role_info["left_audio_path"]
-                    if role_info.get("right_audio_path"):
+                    if not right_prompt_audio_path and role_info.get("right_audio_path"):
                         right_prompt_audio_path = role_info["right_audio_path"]
                     logger.info(f"从双人角色自动设置: enable_double_mode=True, left={left_prompt_audio_path}, right={right_prompt_audio_path}")
+                else:
+                    # 单人模式：只有当前端没有传递音频路径时，才使用角色绑定的音频
+                    if not prompt_audio_path and role_info.get("audio_path"):
+                        prompt_audio_path = role_info["audio_path"]
+                        logger.info(f"从单人角色自动设置: prompt_audio_path={prompt_audio_path}")
         
         logger.info(f"API create_task 请求参数: enable_double_mode={enable_double_mode}")
         logger.info(f"API create_task 请求参数: left_prompt_audio_path={left_prompt_audio_path}")
