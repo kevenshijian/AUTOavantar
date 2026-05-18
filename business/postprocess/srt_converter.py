@@ -63,6 +63,9 @@ def convert_timestamps_to_srt(
     Returns:
         List[SrtEntry]: SRT 字幕条目列表
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     if not time_stamps:
         return []
 
@@ -88,15 +91,56 @@ def convert_timestamps_to_srt(
                 ch_end = token_start + ((i + 1) / len(token_text)) * duration
                 non_punct_times.append((ch, ch_start, ch_end))
 
-    # 第二步：建立 full_text 中非标点字符到时间的映射
-    # full_text 包含标点，需要跳过标点来匹配时间
+    # 第二步：验证 full_text 和 time_stamps 的字符是否匹配
+    # 从 full_text 中提取非标点字符
+    full_text_non_punct = [char for char in full_text if char not in CHINESE_PUNCTUATION]
+    time_stamps_chars = [item[0] for item in non_punct_times]
+
+    logger.info(f"full_text 非标点字符数: {len(full_text_non_punct)}")
+    logger.info(f"time_stamps 字符数: {len(time_stamps_chars)}")
+
+    # 检查是否匹配
+    if len(full_text_non_punct) != len(time_stamps_chars):
+        logger.warning(f"字符数不匹配！full_text: {len(full_text_non_punct)}, time_stamps: {len(time_stamps_chars)}")
+
+        # 找出不匹配的位置
+        for i in range(min(len(full_text_non_punct), len(time_stamps_chars))):
+            if full_text_non_punct[i] != time_stamps_chars[i]:
+                logger.warning(f"位置 {i} 不匹配: full_text='{full_text_non_punct[i]}', time_stamps='{time_stamps_chars[i]}'")
+                if i > 0:
+                    logger.warning(f"  前面的字符: full_text='{full_text_non_punct[i-1]}', time_stamps='{time_stamps_chars[i-1]}'")
+                break
+
+        # 如果 time_stamps 比 full_text 多，显示多余的字符
+        if len(time_stamps_chars) > len(full_text_non_punct):
+            extra_chars = time_stamps_chars[len(full_text_non_punct):]
+            logger.warning(f"time_starts 多余的字符: {extra_chars[:20]}")
+
+        # 如果 full_text 比 time_stamps 多，显示多余的字符
+        if len(full_text_non_punct) > len(time_stamps_chars):
+            extra_chars = full_text_non_punct[len(time_stamps_chars):]
+            logger.warning(f"full_text 多余的字符: {extra_chars[:20]}")
+
+    # 第三步：建立 full_text 中非标点字符到时间的映射
+    # 使用 time_stamps 的字符作为基准，因为时间戳是准确的
     char_time_map = {}  # full_text 中的索引 -> (start_time, end_time)
     time_idx = 0
     for i, char in enumerate(full_text):
         if char in CHINESE_PUNCTUATION:
             continue  # 跳过标点符号
         if time_idx < len(non_punct_times):
+            # 使用 time_stamps 的时间
             char_time_map[i] = (non_punct_times[time_idx][1], non_punct_times[time_idx][2])
+            time_idx += 1
+        else:
+            # 如果 time_stamps 不够，使用最后一个时间戳的结束时间作为基准
+            # 并估算时间（每字符约0.2秒）
+            if non_punct_times:
+                last_end = non_punct_times[-1][2]
+                estimated_start = last_end + 0.2 * (time_idx - len(non_punct_times))
+                estimated_end = estimated_start + 0.2
+                char_time_map[i] = (estimated_start, estimated_end)
+                logger.warning(f"位置 {i} 字符 '{char}' 没有时间戳，使用估算时间: {estimated_start:.2f}")
             time_idx += 1
 
     # 第三步：按标点符号分段，生成字幕条目
