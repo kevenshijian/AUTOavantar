@@ -1537,16 +1537,16 @@ class VideoSynthesizer:
                     logger.error("构建 xfade 滤镜链失败")
                     return None
 
-                # 构建音频合并滤镜
+                # 构建音频合并滤镜（使用 acrossfade 与视频转场同步）
                 if len(normalized_paths) == 2:
-                    audio_offset = video_durations[0] - transition_duration
                     audio_filter = f"[0:a][1:a]acrossfade=d={transition_duration}:c1=tri:c2=tri[aout]"
                 else:
+                    # 多个视频：链式音频 acrossfade
                     audio_filter_parts = []
                     current_audio_input = "[0:a]"
                     for i in range(len(normalized_paths) - 1):
                         output_label = f"[a{i}]" if i < len(normalized_paths) - 2 else "[aout]"
-                        audio_filter_part = f"{current_audio_input}[{i+1}:a]amix=inputs=2:duration=first:dropout_transition={transition_duration}{output_label}"
+                        audio_filter_part = f"{current_audio_input}[{i+1}:a]acrossfade=d={transition_duration}:c1=tri:c2=tri{output_label}"
                         audio_filter_parts.append(audio_filter_part)
                         current_audio_input = f"[a{i}]"
                     audio_filter = ";".join(audio_filter_parts)

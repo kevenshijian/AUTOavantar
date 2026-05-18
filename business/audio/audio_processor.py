@@ -588,7 +588,7 @@ class AudioProcessor:
             if results:
                 try:
                     logger.info("合并同一说话人的音频...")
-                    self._merge_speaker_audios(task, results)
+                    self._merge_speaker_audios(task, results, config)
                 except Exception as e:
                     logger.error(f"合并音频失败: {e}")
         else:
@@ -711,20 +711,25 @@ class AudioProcessor:
 
         return results
 
-    def _merge_speaker_audios(self, task: Task, results: List[AudioSegmentResult]):
+    def _merge_speaker_audios(self, task: Task, results: List[AudioSegmentResult], config: TaskConfig = None):
         """
         合并同一说话人的音频并添加静音（按标签分组对齐）
-        
+
         根据需求实现按标签分组的时长对齐逻辑：
         - 每个标签下的左右说话人音频分别对齐
         - 例如"开场"标签：左边11秒 + 右边9秒 → 各对齐为20秒
         - 例如"开心"标签：左边8秒 + 右边7秒 → 各对齐为15秒
-        
+
+        转场效果缓冲：
+        - 如果启用了转场效果，在音频前后各添加 transition_duration/2 秒静音
+        - 这样转场效果不会"吞掉"音频内容
+
         最终将所有标签组的对齐后音频按顺序合并
-        
+
         Args:
             task: 任务
             results: 音频结果列表
+            config: 任务配置（用于获取转场时长）
         """
         import os
         import subprocess
@@ -822,6 +827,13 @@ class AudioProcessor:
                                         right_aligned_path = right_merged_for_scene
                         else:
                             # 非场景标签：进行音频对齐
+                            # 计算转场缓冲时长：如果启用了转场效果，前后各添加 transition_duration/2 秒
+                            transition_buffer = 0.0
+                            if config and getattr(config, 'enable_transition', False):
+                                transition_duration = getattr(config, 'transition_duration', 0.5)
+                                transition_buffer = transition_duration / 2
+                                logger.info(f"标签 '{tone}' 启用转场效果，缓冲时长: {transition_buffer:.2f}秒")
+
                             if left_segments:
                                 left_aligned = self._create_aligned_audio_for_tone(
                                     segments=left_segments,
@@ -829,13 +841,14 @@ class AudioProcessor:
                                     speaker="left",
                                     tone=tone,
                                     task_id=task.task_id,
-                                    prepend_silence=False
+                                    prepend_silence=False,
+                                    transition_buffer=transition_buffer
                                 )
                                 if left_aligned:
                                     left_aligned_segments.append(left_aligned)
                                     left_aligned_path = left_aligned
                                     logger.info(f"标签 '{tone}' 左边音频对齐完成: {left_aligned}")
-                            
+
                             if right_segments:
                                 right_aligned = self._create_aligned_audio_for_tone(
                                     segments=right_segments,
@@ -843,7 +856,8 @@ class AudioProcessor:
                                     speaker="right",
                                     tone=tone,
                                     task_id=task.task_id,
-                                    prepend_silence=True
+                                    prepend_silence=True,
+                                    transition_buffer=transition_buffer
                                 )
                                 if right_aligned:
                                     right_aligned_segments.append(right_aligned)
@@ -890,11 +904,12 @@ class AudioProcessor:
         speaker: str,
         tone: str,
         task_id: str,
-        prepend_silence: bool = False
+        prepend_silence: bool = False,
+        transition_buffer: float = 0.0
     ) -> Optional[str]:
         """
         为单个标签组创建时长对齐的音频文件
-        
+
         Args:
             segments: 该标签下该说话人的音频段落列表
             silence_duration: 需要添加的静音时长（秒）
@@ -902,7 +917,8 @@ class AudioProcessor:
             tone: 标签名称
             task_id: 任务ID
             prepend_silence: 是否在前面添加静音
-            
+            transition_buffer: 转场缓冲时长（秒），前后各添加此时长静音
+
         Returns:
             对齐后的音频文件路径，失败返回 None
         """
@@ -913,18 +929,21 @@ class AudioProcessor:
         
         # 计算该标签下该说话人的音频总时长
         audio_total_duration = sum(getattr(s, 'duration', 0.0) for s in segments)
-        
-        logger.info(f"标签 '{tone}' {speaker} 说话人: 音频 {audio_total_duration:.2f}秒, 静音 {silence_duration:.2f}秒")
-        
+
+        # 计算转场缓冲时长（前后各添加 transition_buffer 秒）
+        buffer_duration = transition_buffer
+
+        logger.info(f"标签 '{tone}' {speaker} 说话人: 音频 {audio_total_duration:.2f}秒, 静音 {silence_duration:.2f}秒, 转场缓冲 {buffer_duration:.2f}秒")
+
         # 生成对齐后的音频文件名
         safe_tone = tone.replace("/", "_").replace("\\", "_") if tone else "default"
         output_filename = f"{speaker}_{safe_tone}_{task_id}.wav"
         output_path = os.path.join(self.output_dir, output_filename)
-        
+
         try:
             # 步骤1：合并该标签下该说话人的所有音频段落
             temp_concat_file = os.path.join(self.output_dir, f"temp_concat_{speaker}_{safe_tone}_{task_id}.txt")
-            
+
             with open(temp_concat_file, 'w', encoding='utf-8') as f:
                 for seg in segments:
                     audio_path = seg.audio_path
@@ -942,9 +961,9 @@ class AudioProcessor:
                         else:
                             escaped_path = audio_path
                         f.write(f"file '{escaped_path}'\n")
-            
+
             temp_merged_path = os.path.join(self.output_dir, f"temp_merged_{speaker}_{safe_tone}_{task_id}.wav")
-            
+
             cmd = [
                 "ffmpeg",
                 "-f", "concat",
@@ -956,27 +975,54 @@ class AudioProcessor:
                 "-y",
                 temp_merged_path
             ]
-            
+
             result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
-            
+
             if os.path.exists(temp_concat_file):
                 os.remove(temp_concat_file)
-            
+
             if result.returncode != 0:
                 logger.error(f"合并标签 '{tone}' {speaker} 音频段落失败: {result.stderr}")
                 return None
-            
-            # 步骤2：添加静音
-            if silence_duration <= 0:
-                if os.path.exists(temp_merged_path):
-                    os.rename(temp_merged_path, output_path)
-                    return output_path
-            
+
+            # 步骤2：添加静音（包括对齐静音和转场缓冲静音）
+            # 新逻辑：
+            # - 左边说话人：转场缓冲 + 音频 + 对齐静音 + 转场缓冲
+            # - 右边说话人：转场缓冲 + 对齐静音 + 音频 + 转场缓冲
+
+            # 计算各部分时长
+            buffer_ms = int(buffer_duration * 1000)
             silence_ms = int(silence_duration * 1000)
-            
+
+            # 构建滤镜链
+            # 使用 adelay 在前面添加静音，使用 apad 在后面添加静音
+            # 注意：adelay 只是延迟起始时间，apad=whole_dur 设置的是最终总时长
+            # 所以 whole_dur = 前置静音 + 音频时长 + 后置静音
+            filter_parts = []
+
             if prepend_silence:
-                # 前面添加静音，后面保持声音
-                filter_complex = f"[0:a]adelay={silence_ms}|{silence_ms}[a]"
+                # 右边说话人：前面需要转场缓冲 + 对齐静音，后面需要转场缓冲
+                # 总前置静音 = buffer + silence
+                total_prepend_ms = buffer_ms + silence_ms
+                if total_prepend_ms > 0:
+                    filter_parts.append(f"adelay={total_prepend_ms}|{total_prepend_ms}")
+
+                # 最终总时长 = 前置静音 + 音频时长 + 后置转场缓冲
+                # whole_dur 需要包含前置静音时长，因为 adelay 只是延迟，apad 需要填充到总时长
+                total_duration = (total_prepend_ms / 1000) + audio_total_duration + buffer_duration
+                filter_parts.append(f"apad=whole_dur={total_duration}")
+            else:
+                # 左边说话人：前面需要转场缓冲，后面需要对齐静音 + 转场缓冲
+                # 前面添加转场缓冲
+                if buffer_ms > 0:
+                    filter_parts.append(f"adelay={buffer_ms}|{buffer_ms}")
+
+                # 最终总时长 = 前置转场缓冲 + 音频时长 + 对齐静音 + 后置转场缓冲
+                total_duration = buffer_duration + audio_total_duration + silence_duration + buffer_duration
+                filter_parts.append(f"apad=whole_dur={total_duration}")
+
+            if filter_parts:
+                filter_complex = f"[0:a]{','.join(filter_parts)}[a]"
                 cmd = [
                     "ffmpeg",
                     "-i", temp_merged_path,
@@ -989,33 +1035,23 @@ class AudioProcessor:
                     output_path
                 ]
             else:
-                # 前面保持声音，后面添加静音
-                total_duration = audio_total_duration + silence_duration
-                filter_complex = f"[0:a]apad=whole_dur={total_duration}[a]"
-                cmd = [
-                    "ffmpeg",
-                    "-i", temp_merged_path,
-                    "-filter_complex", filter_complex,
-                    "-map", "[a]",
-                    "-c:a", "pcm_s16le",
-                    "-ar", "16000",
-                    "-ac", "1",
-                    "-y",
-                    output_path
-                ]
-            
+                # 不需要添加静音，直接重命名
+                if os.path.exists(temp_merged_path):
+                    os.rename(temp_merged_path, output_path)
+                    return output_path
+
             result = subprocess.run(cmd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
-            
+
             if os.path.exists(temp_merged_path):
                 os.remove(temp_merged_path)
-            
+
             if result.returncode != 0:
                 logger.error(f"添加静音失败: {result.stderr}")
                 return None
-            
+
             if os.path.exists(output_path):
                 return output_path
-            
+
             return None
             
         except Exception as e:
