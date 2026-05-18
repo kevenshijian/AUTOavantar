@@ -70,7 +70,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument } from '@element-plus/icons-vue'
-import api from '@/services/api'
+import { licenseApi } from '@/services/api'
 
 const props = defineProps({
   modelValue: {
@@ -99,8 +99,8 @@ const form = ref({
 
 const fetchStatus = async () => {
   try {
-    // 注意：request.js 响应拦截器已返回 response.data，所以 response 就是数据本身
-    const response = await api.get('/license/status')
+    // licenseApi.getStatus() 返回的已经是 response.data（经过拦截器处理）
+    const response = await licenseApi.getStatus()
     machineCode.value = response.machine_code
     isActivated.value = response.is_activated
     remainingQuota.value = response.remaining_quota
@@ -120,11 +120,9 @@ const handleActivate = async () => {
   errorMessage.value = ''
 
   try {
-    const response = await api.post('/license/activate', {
-      activation_code: form.value.activationCode.trim()
-    })
+    // licenseApi.activate() 返回的已经是 response.data（经过拦截器处理）
+    const response = await licenseApi.activate(form.value.activationCode.trim())
 
-    // 注意：request.js 响应拦截器已返回 response.data，所以 response 就是数据本身
     if (response.success) {
       isActivated.value = true
       remainingQuota.value = response.remaining_quota

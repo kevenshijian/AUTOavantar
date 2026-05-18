@@ -716,11 +716,7 @@ class IndexTTS2:
                 print(f"normalized emo_vector: {emo_vector}, sum: {sum(emo_vector)}")
 
         if emo_audio_prompt is None:
-            # we are not using any external "emotion reference voice"; use
-            # speaker's voice as the main emotion reference audio.
             emo_audio_prompt = spk_audio_prompt
-            # 只有当既没有 emo_vector 也没有 emo_audio_prompt 时，才使用默认的 emo_alpha = 1.0
-            # 当 emo_vector 存在时，保留用户传入的 emo_alpha（intensity）用于控制情绪权重
             if emo_vector is None:
                 emo_alpha = 1.0
 
