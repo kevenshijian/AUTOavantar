@@ -99,11 +99,12 @@ const form = ref({
 
 const fetchStatus = async () => {
   try {
+    // 注意：request.js 响应拦截器已返回 response.data，所以 response 就是数据本身
     const response = await api.get('/license/status')
-    machineCode.value = response.data.machine_code
-    isActivated.value = response.data.is_activated
-    remainingQuota.value = response.data.remaining_quota
-    maxQuota.value = response.data.max_quota
+    machineCode.value = response.machine_code
+    isActivated.value = response.is_activated
+    remainingQuota.value = response.remaining_quota
+    maxQuota.value = response.max_quota
   } catch (error) {
     console.error('获取许可证状态失败:', error)
   }
