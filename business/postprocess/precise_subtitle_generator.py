@@ -88,7 +88,7 @@ class PreciseSubtitleGenerator:
         video_path: str,
         segments_text: List[str],
         output_srt_path: str,
-        max_chars: int = 12
+        max_chars: int = 16
     ) -> str:
         """
         生成精准字幕
@@ -97,7 +97,7 @@ class PreciseSubtitleGenerator:
             video_path: 视频文件路径
             segments_text: 分段文本列表（用于拼接完整文案）
             output_srt_path: 输出 SRT 文件路径
-            max_chars: 每条字幕最大字符数，默认 12
+            max_chars: 每条字幕最大字符数，默认 16
 
         Returns:
             str: 输出的 SRT 文件路径

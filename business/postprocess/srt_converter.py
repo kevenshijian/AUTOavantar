@@ -21,7 +21,12 @@ import re
 MAX_CHARS_PER_SUBTITLE = 12
 
 # 中文字符标点符号（用于拆分字幕，但不显示在字幕中）
-CHINESE_PUNCTUATION = "，。！？；：、,.!?;:）】》\"'」』～~—…"
+# 包含各种引号变体：单引号、双引号、书名号等
+# 使用 Unicode 转义序列避免编码问题
+CHINESE_PUNCTUATION = (
+    "，。！？；：、,.!?;:）】》\"'」』～~—…"
+    "‘’“”「」『』"  # ''""「」『』
+)
 
 
 @dataclass
@@ -121,6 +126,23 @@ def convert_timestamps_to_srt(
             extra_chars = full_text_non_punct[len(time_stamps_chars):]
             logger.warning(f"full_text 多余的字符: {extra_chars[:20]}")
 
+        # 关键修复：使用 time_stamps 的字符作为基准重建 full_text
+        # 因为时间戳是准确的，而 full_text 可能包含音频中不存在的内容
+        logger.warning("使用 time_stamps 的字符重建文本，忽略 full_text 中多余的内容")
+        # 保留标点符号位置信息，但只使用 time_stamps 中存在的字符
+        rebuilt_text = ""
+        time_idx = 0
+        for char in full_text:
+            if char in CHINESE_PUNCTUATION:
+                rebuilt_text += char
+            elif time_idx < len(time_stamps_chars):
+                # 使用 time_stamps 中的字符（可能与 full_text 不同）
+                rebuilt_text += time_stamps_chars[time_idx]
+                time_idx += 1
+            # 如果 time_stamps 已经用完，跳过 full_text 中剩余的字符
+        full_text = rebuilt_text
+        logger.info(f"重建后的文本长度: {len(full_text)} 非标点字符: {time_idx}")
+
     # 第三步：建立 full_text 中非标点字符到时间的映射
     # 使用 time_stamps 的字符作为基准，因为时间戳是准确的
     char_time_map = {}  # full_text 中的索引 -> (start_time, end_time)
@@ -133,15 +155,10 @@ def convert_timestamps_to_srt(
             char_time_map[i] = (non_punct_times[time_idx][1], non_punct_times[time_idx][2])
             time_idx += 1
         else:
-            # 如果 time_stamps 不够，使用最后一个时间戳的结束时间作为基准
-            # 并估算时间（每字符约0.2秒）
-            if non_punct_times:
-                last_end = non_punct_times[-1][2]
-                estimated_start = last_end + 0.2 * (time_idx - len(non_punct_times))
-                estimated_end = estimated_start + 0.2
-                char_time_map[i] = (estimated_start, estimated_end)
-                logger.warning(f"位置 {i} 字符 '{char}' 没有时间戳，使用估算时间: {estimated_start:.2f}")
-            time_idx += 1
+            # 如果 time_stamps 不够，说明重建逻辑有问题，记录警告
+            logger.warning(f"位置 {i} 字符 '{char}' 没有时间戳（time_idx={time_idx}, len(non_punct_times)={len(non_punct_times)}）")
+            # 不再使用估算时间，因为这会导致时间轴漂移
+            # 如果出现这种情况，说明前面的重建逻辑有问题
 
     # 第三步：按标点符号分段，生成字幕条目
     subtitle_entries: List[SrtEntry] = []

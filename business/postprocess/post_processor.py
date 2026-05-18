@@ -507,22 +507,30 @@ class PostProcessor:
                     logger.error("构建 xfade 滤镜链失败")
                     return False
 
-                # 构建音频合并滤镜（使用 crossfade）
+                # 构建音频合并滤镜（使用 acrossfade 与视频转场同步）
+                # 音频的 acrossfade 需要与视频的 xfade 时间轴匹配
                 audio_filter_parts = []
                 if len(normalized_paths) == 2:
                     # 两个视频：简单的音频交叉淡入淡出
-                    audio_offset = video_durations[0] - transition_duration
                     audio_filter = f"[0:a][1:a]acrossfade=d={transition_duration}:c1=tri:c2=tri[aout]"
                 else:
-                    # 多个视频：链式音频合并
+                    # 多个视频：链式音频 acrossfade
+                    # 与视频 xfade 的 offset 计算逻辑相同
                     current_audio_input = "[0:a]"
+                    accumulated_duration = 0.0
+
                     for i in range(len(normalized_paths) - 1):
-                        audio_offset = video_durations[i] - transition_duration
+                        accumulated_duration += video_durations[i]
+
                         output_label = f"[a{i}]" if i < len(normalized_paths) - 2 else "[aout]"
-                        # 使用 amix 进行音频合并，duration_first 确保按第一个音频时长为准
-                        audio_filter_part = f"{current_audio_input}[{i+1}:a]amix=inputs=2:duration=first:dropout_transition={transition_duration}{output_label}"
+                        # 使用 acrossfade 进行音频交叉淡入淡出
+                        audio_filter_part = f"{current_audio_input}[{i+1}:a]acrossfade=d={transition_duration}:c1=tri:c2=tri{output_label}"
                         audio_filter_parts.append(audio_filter_part)
                         current_audio_input = f"[a{i}]"
+
+                        # 从累计时长中减去转场时长（与视频 xfade 逻辑一致）
+                        accumulated_duration -= transition_duration
+
                     audio_filter = ";".join(audio_filter_parts)
 
                 # 合并视频和音频滤镜

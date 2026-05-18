@@ -537,7 +537,8 @@ class WorkflowService:
         logger.info(f"_build_task_config: task.config={config}, enable_double_mode={enable_double_mode}")
         if config:
             logger.info(f"config.enable_double_mode={getattr(config, 'enable_double_mode', 'NOT_FOUND')}")
-        
+            logger.info(f"config.enable_transition={getattr(config, 'enable_transition', 'NOT_FOUND')}")
+
         return {
             "source_video_path": getattr(task, 'source_video_path', ''),
             "script_text": getattr(task, 'script_text', ''),
@@ -640,6 +641,7 @@ class WorkflowService:
             logger.info(f"_run_workflow_sync config: enable_double_mode={config.get('enable_double_mode')}")
             logger.info(f"_run_workflow_sync config: left_prompt_audio_path={config.get('left_prompt_audio_path')}")
             logger.info(f"_run_workflow_sync config: right_prompt_audio_path={config.get('right_prompt_audio_path')}")
+            logger.info(f"_run_workflow_sync config: enable_transition={config.get('enable_transition')}, transition_type={config.get('transition_type')}, transition_effect={config.get('transition_effect')}")
 
             def schedule_progress(progress: float, stage: str):
                 try:
@@ -706,6 +708,13 @@ class WorkflowService:
                 enable_denoise=config.get("enable_denoise", getattr(task, 'enable_denoise', False)),
                 denoise_strength=config.get("denoise_strength", getattr(task, 'denoise_strength', 0.5)),
                 enable_double_mode=config.get("enable_double_mode", False),
+                # 转场效果参数
+                enable_transition=config.get("enable_transition", False),
+                transition_type=config.get("transition_type", "淡入淡出"),
+                transition_effect=config.get("transition_effect", "fade"),
+                transition_random=config.get("transition_random", False),
+                transition_random_all=config.get("transition_random_all", False),
+                transition_duration=config.get("transition_duration", 0.5),
             )
 
             # 使用 asyncio.to_thread 在线程池中运行同步的 workflow.run()
