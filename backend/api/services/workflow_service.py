@@ -441,9 +441,17 @@ class WorkflowService:
             subtitle_line_spacing=kwargs.get("subtitle_line_spacing", 0.5),
             enable_double_mode=enable_double_mode,
             heygem_steps=heygem_steps,
-            inference_batch_size=heygem_steps  # 使用 heygem_steps 作为推理批次大小
+            inference_batch_size=heygem_steps,  # 使用 heygem_steps 作为推理批次大小
+            # 转场效果参数
+            enable_transition=kwargs.get("enable_transition", False),
+            transition_type=kwargs.get("transition_type", "淡入淡出"),
+            transition_effect=kwargs.get("transition_effect", "fade"),
+            transition_random=kwargs.get("transition_random", False),
+            transition_random_all=kwargs.get("transition_random_all", False),
+            transition_duration=kwargs.get("transition_duration", 0.5)
         )
         logger.info(f"TaskConfig 创建完成: inference_batch_size={config.inference_batch_size}, heygem_steps 参数值={heygem_steps}")
+        logger.info(f"转场效果配置: enable_transition={config.enable_transition}, transition_type={config.transition_type}, transition_effect={config.transition_effect}, transition_random={config.transition_random}, transition_random_all={config.transition_random_all}, transition_duration={config.transition_duration}")
         task.config = config
 
         self._tasks[task_id] = task
@@ -571,6 +579,13 @@ class WorkflowService:
             "scene_videos_with_tags": getattr(task, 'scene_videos_with_tags', []),
             "ending_video_with_tags": getattr(task, 'ending_video_with_tags', None),
             "scene_tag_group_id": getattr(task, 'scene_tag_group_id', None),
+            # 转场效果参数
+            "enable_transition": getattr(config, 'enable_transition', False) if config else False,
+            "transition_type": getattr(config, 'transition_type', "淡入淡出") if config else "淡入淡出",
+            "transition_effect": getattr(config, 'transition_effect', "fade") if config else "fade",
+            "transition_random": getattr(config, 'transition_random', False) if config else False,
+            "transition_random_all": getattr(config, 'transition_random_all', False) if config else False,
+            "transition_duration": getattr(config, 'transition_duration', 0.5) if config else 0.5,
         }
 
     def _execute_task_callback(self, task_id: str, config: Dict):

@@ -202,7 +202,14 @@ async def create_task(
             loop_videos_with_tags=[v.model_dump() for v in request.loop_videos_with_tags] if request.loop_videos_with_tags else [],
             scene_videos_with_tags=[v.model_dump() for v in request.scene_videos_with_tags] if request.scene_videos_with_tags else [],
             ending_video_with_tags=request.ending_video_with_tags.model_dump() if request.ending_video_with_tags else None,
-            scene_tag_group_id=request.scene_tag_group_id
+            scene_tag_group_id=request.scene_tag_group_id,
+            # 转场效果参数
+            enable_transition=request.enable_transition,
+            transition_type=request.transition_type,
+            transition_effect=request.transition_effect,
+            transition_random=request.transition_random,
+            transition_random_all=request.transition_random_all,
+            transition_duration=request.transition_duration
         )
 
         await register_task_websocket(task.task_id, workflow_service)

@@ -1942,6 +1942,10 @@ const submitTask = async (runImmediately) => {
       transition_random_all: taskForm.transitionParams.randomAll,
       transition_duration: taskForm.transitionParams.duration,
 
+      // DEBUG: 打印转场配置
+      _debug_postProcessing: taskForm.postProcessing,
+      _debug_enable_transition: taskForm.postProcessing.includes('transition'),
+
       heygem_steps: taskForm.videoParams.inferenceSteps,
       role_id: taskForm.roleId,
       scene_tag_group_id: taskForm.sceneTagGroupId,

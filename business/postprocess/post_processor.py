@@ -151,6 +151,7 @@ class PostProcessor:
                 )
 
                 # 根据配置选择合并方式
+                logger.info(f"检查转场配置: enable_transition={config.enable_transition}, video_count={len(video_paths)}")
                 if config.enable_transition:
                     # 使用转场效果合并
                     logger.info("启用转场效果，使用 xfade 滤镜合并")
