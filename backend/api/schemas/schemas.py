@@ -178,6 +178,14 @@ class TaskCreateRequest(BaseModel):
     heygem_steps: int = Field(default=16, ge=4, le=32, description="推理步数")
     heygem_batch_size: int = Field(default=4, ge=1, le=16, description="推理批次大小")
 
+    # 转场效果配置
+    enable_transition: bool = Field(default=False, description="是否启用转场效果")
+    transition_type: str = Field(default="淡入淡出", description="转场分类")
+    transition_effect: str = Field(default="fade", description="转场效果名称")
+    transition_random: bool = Field(default=False, description="是否启用随机效果")
+    transition_random_all: bool = Field(default=False, description="是否每次转场都随机")
+    transition_duration: float = Field(default=0.5, ge=0.5, le=5.0, description="转场时长（秒）")
+
     # 兼容旧接口的视频素材（简单路径格式）
     opening_video: Optional[str] = Field(None, description="开场视频路径（兼容）")
     loop_videos: List[str] = Field(default_factory=list, description="循环视频列表（兼容）")

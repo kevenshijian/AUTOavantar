@@ -428,7 +428,77 @@
                 <el-checkbox label="subtitle">添加字幕</el-checkbox>
                 <el-checkbox label="bgm">添加BGM</el-checkbox>
                 <el-checkbox label="cover">生成封面</el-checkbox>
+                <el-checkbox label="transition">转场效果</el-checkbox>
               </el-checkbox-group>
+            </el-form-item>
+
+            <!-- 转场效果设置 -->
+            <el-form-item v-if="taskForm.postProcessing.includes('transition')" label="转场效果设置" class="transition-settings-wrapper">
+              <div class="transition-settings-panel">
+                <!-- 转场分类 -->
+                <div class="setting-group">
+                  <div class="group-title">
+                    <el-icon><VideoPlay /></el-icon>
+                    <span>转场分类</span>
+                  </div>
+                  <div class="group-content">
+                    <div class="setting-item">
+                      <label class="item-label">分类</label>
+                      <el-select v-model="taskForm.transitionParams.type" placeholder="选择分类" class="type-select" @change="handleTransitionTypeChange">
+                        <el-option v-for="category in transitionCategories" :key="category" :label="category" :value="category" />
+                      </el-select>
+                    </div>
+                    <div class="setting-item">
+                      <label class="item-label">效果</label>
+                      <el-select v-model="taskForm.transitionParams.effect" placeholder="选择效果" class="effect-select" :disabled="taskForm.transitionParams.random">
+                        <el-option v-for="effect in currentTransitionEffects" :key="effect.value" :label="effect.name" :value="effect.value" />
+                      </el-select>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 随机效果 -->
+                <div class="setting-group">
+                  <div class="group-title">
+                    <el-icon><MagicStick /></el-icon>
+                    <span>随机效果</span>
+                  </div>
+                  <div class="group-content">
+                    <div class="setting-item">
+                      <el-checkbox v-model="taskForm.transitionParams.random" @change="handleTransitionRandomChange">
+                        启用随机效果
+                      </el-checkbox>
+                    </div>
+                    <div class="setting-item" v-if="taskForm.transitionParams.random">
+                      <el-checkbox v-model="taskForm.transitionParams.randomAll">
+                        每次转场都随机（不勾选则整个视频统一使用一个随机效果）
+                      </el-checkbox>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 持续时间 -->
+                <div class="setting-group">
+                  <div class="group-title">
+                    <el-icon><Clock /></el-icon>
+                    <span>转场时长</span>
+                  </div>
+                  <div class="group-content">
+                    <div class="setting-item">
+                      <label class="item-label">时长</label>
+                      <el-slider
+                        v-model="taskForm.transitionParams.duration"
+                        :min="0.5"
+                        :max="5.0"
+                        :step="0.1"
+                        show-input
+                        class="duration-slider"
+                      />
+                      <span class="slider-unit">秒</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </el-form-item>
             
             <!-- 字幕设置 -->
@@ -764,11 +834,11 @@
 import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { 
-  Plus, 
-  Delete, 
-  VideoCamera, 
-  Microphone, 
+import {
+  Plus,
+  Delete,
+  VideoCamera,
+  Microphone,
   MagicStick,
   VideoPlay,
   Search,
@@ -784,7 +854,8 @@ import {
   SemiSelect,
   Bottom,
   Check,
-  View
+  View,
+  Clock
 } from '@element-plus/icons-vue'
 import { useTaskStore } from '@/stores/taskStore.js'
 import { useMaterialStore } from '@/stores/materialStore.js'
@@ -868,6 +939,13 @@ const taskForm = reactive({
     bgmId: null,
     intensity: 0.2
   },
+  transitionParams: {
+    type: '淡入淡出',
+    effect: 'fade',
+    random: false,
+    randomAll: false,
+    duration: 0.5
+  },
   bgm: null
 })
 
@@ -944,6 +1022,78 @@ const predefineColors = [
   '#ff6600',
   '#9900ff'
 ]
+
+// 转场效果分类
+const transitionCategories = ref(['淡入淡出', '滑动擦除', '图形变换', '特效切片'])
+
+// 转场效果映射表（分类 → 效果列表）
+const transitionEffectsMap = {
+  '淡入淡出': [
+    { name: '交叉淡入淡出', value: 'fade' },
+    { name: '渐隐至黑', value: 'fadeblack' },
+    { name: '渐隐至白', value: 'fadewhite' },
+    { name: '溶解', value: 'dissolve' },
+    { name: '距离过渡', value: 'distance' }
+  ],
+  '滑动擦除': [
+    { name: '向左滑动', value: 'slideleft' },
+    { name: '向右滑动', value: 'slideright' },
+    { name: '向上滑动', value: 'slideup' },
+    { name: '向下滑动', value: 'slidedown' },
+    { name: '向左擦除', value: 'wipeleft' },
+    { name: '向右擦除', value: 'wiperight' },
+    { name: '向上擦除', value: 'wipeup' },
+    { name: '向下擦除', value: 'wipedown' },
+    { name: '平滑左滑', value: 'smoothleft' },
+    { name: '平滑右滑', value: 'smoothright' },
+    { name: '平滑上滑', value: 'smoothup' },
+    { name: '平滑下滑', value: 'smoothdown' }
+  ],
+  '图形变换': [
+    { name: '圆形裁剪', value: 'circlecrop' },
+    { name: '矩形裁剪', value: 'rectcrop' },
+    { name: '圆形展开', value: 'circleopen' },
+    { name: '圆形闭合', value: 'circleclose' },
+    { name: '水平展开', value: 'horzopen' },
+    { name: '水平闭合', value: 'horzclose' },
+    { name: '垂直展开', value: 'vertopen' },
+    { name: '垂直闭合', value: 'vertclose' },
+    { name: '放大过渡', value: 'zoomin' },
+    { name: '水平挤压', value: 'squeezeh' },
+    { name: '垂直挤压', value: 'squeezev' }
+  ],
+  '特效切片': [
+    { name: '像素化', value: 'pixelize' },
+    { name: '径向过渡', value: 'radial' },
+    { name: '高斯模糊', value: 'hblur' },
+    { name: '水平左切片', value: 'hlslice' },
+    { name: '水平右切片', value: 'hrslice' },
+    { name: '垂直上切片', value: 'vuslice' },
+    { name: '垂直下切片', value: 'vdslice' }
+  ]
+}
+
+// 当前分类下的转场效果列表
+const currentTransitionEffects = computed(() => {
+  return transitionEffectsMap[taskForm.transitionParams.type] || []
+})
+
+// 处理转场分类切换
+const handleTransitionTypeChange = (category) => {
+  // 切换分类时，自动选择该分类下的第一个效果
+  const effects = transitionEffectsMap[category]
+  if (effects && effects.length > 0) {
+    taskForm.transitionParams.effect = effects[0].value
+  }
+}
+
+// 处理随机效果切换
+const handleTransitionRandomChange = (random) => {
+  if (random) {
+    // 启用随机效果时，清空具体效果选择
+    taskForm.transitionParams.randomAll = false
+  }
+}
 
 const getFileUrl = (path) => {
   if (!path) return ''
@@ -1783,6 +1933,15 @@ const submitTask = async (runImmediately) => {
       enable_bgm: taskForm.postProcessing.includes('bgm'),
       bgm_volume: taskForm.bgmParams.intensity || 0.3,
       enable_cover: taskForm.postProcessing.includes('cover'),
+
+      // 转场效果配置
+      enable_transition: taskForm.postProcessing.includes('transition'),
+      transition_type: taskForm.transitionParams.type,
+      transition_effect: taskForm.transitionParams.effect,
+      transition_random: taskForm.transitionParams.random,
+      transition_random_all: taskForm.transitionParams.randomAll,
+      transition_duration: taskForm.transitionParams.duration,
+
       heygem_steps: taskForm.videoParams.inferenceSteps,
       role_id: taskForm.roleId,
       scene_tag_group_id: taskForm.sceneTagGroupId,
@@ -2522,6 +2681,65 @@ const handleTagGroupChange = async (groupId) => {
 // 数值输入框样式
 .number-input {
   width: 120px;
+}
+
+// ==================== 转场效果设置面板样式 ====================
+.transition-settings-wrapper {
+  :deep(.el-form-item__content) {
+    width: 100%;
+  }
+}
+
+.transition-settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.type-select {
+  width: 140px;
+}
+
+.effect-select {
+  width: 160px;
+}
+
+.duration-slider {
+  flex: 1;
+  min-width: 200px;
+}
+
+.slider-unit {
+  font-size: 13px;
+  color: #64748b;
+  margin-left: 8px;
+}
+
+// 响应式设计
+@media (max-width: 768px) {
+  .transition-settings-panel {
+    padding: 12px;
+  }
+
+  .type-select,
+  .effect-select {
+    width: 100%;
+  }
+
+  .duration-slider {
+    min-width: 100%;
+  }
+}
+
+// 暗色主题
+.dark-theme .transition-settings-panel {
+  background: linear-gradient(135deg, #1f1f1f 0%, #262626 100%);
+  border-color: #424242;
 }
 
 // 响应式设计

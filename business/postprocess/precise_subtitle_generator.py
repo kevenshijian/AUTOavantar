@@ -123,6 +123,12 @@ class PreciseSubtitleGenerator:
         # 2. 拼接完整文案
         full_text = "".join(segments_text)
         logger.info(f"拼接文案文本，总长度：{len(full_text)} 字")
+        preview = full_text[:100] if len(full_text) > 100 else full_text
+        logger.info(f"文案预览（前100字）：{preview}")
+        # 检查是否包含中文标点符号
+        import re
+        chinese_punct_count = len(re.findall(r'[，。！？；：、]', full_text))
+        logger.info(f"文案中包含 {chinese_punct_count} 个中文标点符号")
 
         # 3. 执行强制对齐
         logger.info("执行强制对齐...")

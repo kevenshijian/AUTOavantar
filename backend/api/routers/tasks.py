@@ -780,3 +780,22 @@ async def analyze_face(
     except Exception as e:
         logger.error(f"面部分析失败: {e}")
         raise HTTPException(status_code=500, detail=f"面部分析失败: {str(e)}")
+
+
+@router.get("/transition-effects", response_model=ApiResponse)
+async def get_transition_effects():
+    """
+    获取所有可用的转场效果列表
+
+    Returns:
+        按分类组织的转场效果字典
+    """
+    from business.postprocess.transition_effects import get_all_transition_effects
+
+    effects = get_all_transition_effects()
+
+    return ApiResponse(
+        code=200,
+        message="success",
+        data=effects
+    )

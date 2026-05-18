@@ -1,6 +1,6 @@
 dual_mode: false
-enable_precise_subtitle: false
+enable_precise_subtitle: true
 heygem_inference_steps: 10
 heygem_original: true
-tts_emo_weight: 0.4
+tts_emo_weight: 0.8
 tts_speed: 1.0

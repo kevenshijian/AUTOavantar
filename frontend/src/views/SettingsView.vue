@@ -208,14 +208,10 @@
             <el-form-item label="精准字幕" class="full-width">
               <el-switch
                 v-model="settingsStore.settings.enable_precise_subtitle"
-                :disabled="ultraLowMemory"
                 @change="handlePreciseSubtitleChange"
               />
               <span class="form-hint">
                 开启后使用 Qwen3-ForcedAligner 强制对齐技术生成精确字幕
-                <el-tag v-if="ultraLowMemory" type="warning" size="small" style="margin-left: 8px">
-                  超低显存模式开启时不可用
-                </el-tag>
               </span>
             </el-form-item>
 
@@ -246,7 +242,7 @@
               <el-slider
                 v-model="settingsStore.settings.tts_emo_weight"
                 :min="0"
-                :max="0.8"
+                :max="1.2"
                 :step="0.05"
                 show-input
               />
@@ -426,11 +422,6 @@ const handleUltraLowMemoryChange = async (value) => {
   try {
     await systemApi.updateConfig({ ultra_low_memory: value })
     ElMessage.success(`超低显存模式已${value ? '开启' : '关闭'}`)
-    // 如果开启超低显存模式，自动关闭精准字幕
-    if (value && settingsStore.settings.enable_precise_subtitle) {
-      settingsStore.settings.enable_precise_subtitle = false
-      await settingsApi.updateDefaultParams({ enable_precise_subtitle: false })
-    }
   } catch (error) {
     ElMessage.error(`更新失败: ${error.response?.data?.detail || error.message}`)
     // 恢复原值

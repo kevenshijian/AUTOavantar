@@ -132,22 +132,6 @@ async def update_system_config(request: SystemConfigUpdateRequest):
     try:
         config_manager = get_config_manager()
 
-        # 校验：超低显存模式开启时无法启用精准字幕
-        if request.ultra_low_memory is True and request.enable_precise_subtitle is True:
-            raise HTTPException(
-                status_code=400,
-                detail="超低显存模式开启时无法启用精准字幕"
-            )
-
-        # 如果当前已经是超低显存模式，请求开启精准字幕也拒绝
-        if request.ultra_low_memory is None and request.enable_precise_subtitle is True:
-            current_ultra_low_memory = config_manager.get_ultra_low_memory()
-            if current_ultra_low_memory:
-                raise HTTPException(
-                    status_code=400,
-                    detail="超低显存模式开启时无法启用精准字幕"
-                )
-
         # 更新低显存模式
         if request.low_memory_mode is not None:
             success = config_manager.set_low_memory_mode(request.low_memory_mode)

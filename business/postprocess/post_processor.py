@@ -6,12 +6,17 @@
 import logging
 import os
 import platform
+import random
 import subprocess
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 
 from core.models.task import Task, TaskConfig, SubtitlePosition
 from business.audio.audio_mixer import AudioMixer
+from business.postprocess.transition_effects import (
+    ALL_TRANSITION_EFFECTS,
+    is_valid_transition_effect
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,8 +150,15 @@ class PostProcessor:
                     f"{task.task_id}.mp4"
                 )
 
-                # 合并视频
-                success = self._concat_videos(video_paths, output_path)
+                # 根据配置选择合并方式
+                if config.enable_transition:
+                    # 使用转场效果合并
+                    logger.info("启用转场效果，使用 xfade 滤镜合并")
+                    success = self._concat_videos_with_transition(video_paths, output_path, config)
+                else:
+                    # 使用普通合并
+                    success = self._concat_videos(video_paths, output_path)
+
                 if not success:
                     logger.error("视频合并失败")
                     return PostProcessResult(
@@ -154,7 +166,7 @@ class PostProcessor:
                         status="failed",
                         error_message="视频合并失败"
                     )
-                
+
                 if not os.path.exists(output_path):
                     logger.error(f"视频合并成功，但文件不存在: {output_path}")
                     return PostProcessResult(
@@ -162,7 +174,7 @@ class PostProcessor:
                         status="failed",
                         error_message="视频合并后文件不存在"
                     )
-                
+
                 logger.info(f"视频合并成功: {output_path}")
 
             # 2. 添加字幕
@@ -395,6 +407,284 @@ class PostProcessor:
         except Exception as e:
             logger.error(f"视频合并失败: {e}")
             return False
+
+    def _concat_videos_with_transition(
+        self,
+        video_paths: List[str],
+        output_path: str,
+        config: TaskConfig
+    ) -> bool:
+        """
+        使用 FFmpeg xfade 滤镜合并视频（带转场效果）
+
+        Args:
+            video_paths: 视频路径列表
+            output_path: 输出路径
+            config: 任务配置（包含转场参数）
+
+        Returns:
+            是否成功
+        """
+        if not video_paths:
+            logger.warning("没有视频文件需要合并")
+            return False
+
+        if len(video_paths) < 2:
+            logger.warning("转场效果需要至少 2 个视频片段")
+            return False
+
+        try:
+            import tempfile
+
+            temp_dir = tempfile.mkdtemp(prefix="video_transition_")
+
+            try:
+                # 1. 获取所有视频的元数据，确定统一参数
+                all_metadata = []
+                for path in video_paths:
+                    if os.path.exists(path):
+                        meta = self._get_video_metadata(path)
+                        if meta:
+                            all_metadata.append(meta)
+
+                if not all_metadata:
+                    logger.error("无法获取任何视频的元数据")
+                    return False
+
+                target_width = max(m['width'] for m in all_metadata)
+                target_height = max(m['height'] for m in all_metadata)
+                target_fps = max(m.get('fps', 30.0) for m in all_metadata)
+
+                logger.info(f"统一视频参数: 分辨率 {target_width}x{target_height}, 帧率 {target_fps}fps")
+
+                # 2. 标准化所有视频
+                normalized_paths = []
+                video_durations = []
+
+                for i, video_path in enumerate(video_paths):
+                    if not os.path.exists(video_path):
+                        logger.warning(f"视频文件不存在，跳过: {video_path}")
+                        continue
+
+                    meta = self._get_video_metadata(video_path)
+
+                    # 标准化视频
+                    normalized_path = os.path.join(temp_dir, f"normalized_{i:03d}.mp4")
+                    if not meta or meta['width'] != target_width or meta['height'] != target_height or abs(meta.get('fps', 30.0) - target_fps) > 0.1:
+                        if self._normalize_video(video_path, target_width, target_height, target_fps, normalized_path):
+                            normalized_paths.append(normalized_path)
+                        else:
+                            logger.warning(f"视频标准化失败，使用原始视频: {video_path}")
+                            normalized_paths.append(video_path)
+                    else:
+                        normalized_paths.append(video_path)
+
+                    # 获取视频时长
+                    duration = self._get_media_duration(normalized_paths[-1])
+                    video_durations.append(duration)
+
+                if len(normalized_paths) < 2:
+                    logger.error("标准化后有效视频不足 2 个")
+                    return False
+
+                # 3. 构建转场效果序列
+                transition_duration = config.transition_duration
+                effects = self._build_transition_effects(
+                    len(normalized_paths),
+                    config
+                )
+
+                # 4. 构建 xfade 滤镜链
+                filter_complex = self._build_xfade_filter_chain(
+                    normalized_paths,
+                    video_durations,
+                    effects,
+                    transition_duration
+                )
+
+                if not filter_complex:
+                    logger.error("构建 xfade 滤镜链失败")
+                    return False
+
+                # 构建音频合并滤镜（使用 crossfade）
+                audio_filter_parts = []
+                if len(normalized_paths) == 2:
+                    # 两个视频：简单的音频交叉淡入淡出
+                    audio_offset = video_durations[0] - transition_duration
+                    audio_filter = f"[0:a][1:a]acrossfade=d={transition_duration}:c1=tri:c2=tri[aout]"
+                else:
+                    # 多个视频：链式音频合并
+                    current_audio_input = "[0:a]"
+                    for i in range(len(normalized_paths) - 1):
+                        audio_offset = video_durations[i] - transition_duration
+                        output_label = f"[a{i}]" if i < len(normalized_paths) - 2 else "[aout]"
+                        # 使用 amix 进行音频合并，duration_first 确保按第一个音频时长为准
+                        audio_filter_part = f"{current_audio_input}[{i+1}:a]amix=inputs=2:duration=first:dropout_transition={transition_duration}{output_label}"
+                        audio_filter_parts.append(audio_filter_part)
+                        current_audio_input = f"[a{i}]"
+                    audio_filter = ";".join(audio_filter_parts)
+
+                # 合并视频和音频滤镜
+                full_filter_complex = f"{filter_complex};{audio_filter}"
+
+                # 5. 执行 FFmpeg 命令
+                cmd = [
+                    "ffmpeg", "-y"
+                ]
+
+                # 添加输入文件
+                for path in normalized_paths:
+                    cmd.extend(["-i", path])
+
+                # 添加滤镜
+                cmd.extend(["-filter_complex", full_filter_complex])
+
+                # 输出设置 - 同时映射视频和音频
+                cmd.extend([
+                    "-map", "[vout]",
+                    "-map", "[aout]",
+                    "-c:v", "libx264",
+                    "-crf", "18",
+                    "-preset", "medium",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    output_path
+                ])
+
+                logger.info(f"转场合并命令: {' '.join(cmd)}")
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+                )
+
+                if result.returncode != 0:
+                    logger.error(f"转场合并失败: {result.stderr}")
+                    return False
+
+                logger.info(f"转场合并成功: {output_path}")
+                return True
+
+            finally:
+                import shutil
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+
+        except Exception as e:
+            logger.error(f"转场合并失败: {e}")
+            return False
+
+    def _build_transition_effects(
+        self,
+        video_count: int,
+        config: TaskConfig
+    ) -> List[str]:
+        """
+        构建转场效果序列
+
+        Args:
+            video_count: 视频数量
+            config: 任务配置
+
+        Returns:
+            转场效果名称列表
+        """
+        transition_count = video_count - 1
+
+        if config.transition_random:
+            if config.transition_random_all:
+                # 每次转场都随机选择效果
+                effects = [random.choice(ALL_TRANSITION_EFFECTS) for _ in range(transition_count)]
+                logger.info(f"随机转场效果（每次不同）: {effects}")
+            else:
+                # 整个视频统一使用一个随机效果
+                effect = random.choice(ALL_TRANSITION_EFFECTS)
+                effects = [effect] * transition_count
+                logger.info(f"随机转场效果（统一）: {effect}")
+        else:
+            # 使用用户指定的效果
+            effect = config.transition_effect
+            if not is_valid_transition_effect(effect):
+                logger.warning(f"无效的转场效果 '{effect}'，使用默认 'fade'")
+                effect = "fade"
+            effects = [effect] * transition_count
+            logger.info(f"指定转场效果: {effect}")
+
+        return effects
+
+    def _build_xfade_filter_chain(
+        self,
+        video_paths: List[str],
+        video_durations: List[float],
+        effects: List[str],
+        transition_duration: float
+    ) -> Optional[str]:
+        """
+        构建 xfade 滤镜链
+
+        Args:
+            video_paths: 视频路径列表
+            video_durations: 视频时长列表
+            effects: 转场效果名称列表
+            transition_duration: 转场时长
+
+        Returns:
+            滤镜字符串，失败返回 None
+        """
+        try:
+            n = len(video_paths)
+            if n < 2:
+                return None
+
+            # 验证转场时长不超过最短视频时长
+            min_duration = min(video_durations)
+            if transition_duration >= min_duration:
+                logger.warning(f"转场时长 {transition_duration}s 超过最短视频时长 {min_duration}s，自动调整为 {min_duration * 0.4:.2f}s")
+                transition_duration = min_duration * 0.4
+
+            filter_parts = []
+
+            # 第一个转场：[0:v][1:v]xfade=transition=fade:duration=0.5:offset=X[v0]
+            # 第二个转场：[v0][2:v]xfade=transition=fade:duration=0.5:offset=Y[v1]
+            # ...
+
+            # 正确的 offset 计算：
+            # 第一个转场 offset = 第一个视频时长 - 转场时长
+            # 第二个转场 offset = 第一个视频时长 + 第二个视频时长 - 2 * 转场时长
+            # 即：累计时长 - (转场次数 * 转场时长)
+
+            accumulated_duration = 0.0
+            current_input = "[0:v]"
+
+            for i in range(n - 1):
+                effect = effects[i] if i < len(effects) else "fade"
+                output_label = f"[v{i}]" if i < n - 2 else "[vout]"
+
+                # 累加当前视频时长
+                accumulated_duration += video_durations[i]
+
+                # 计算当前转场的 offset
+                # offset = 累计时长 - (已完成的转场数 + 1) * 转场时长
+                current_offset = accumulated_duration - transition_duration
+
+                filter_part = f"{current_input}[{i+1}:v]xfade=transition={effect}:duration={transition_duration}:offset={current_offset:.3f}{output_label}"
+                filter_parts.append(filter_part)
+
+                # 更新下一个转场的输入
+                current_input = f"[v{i}]"
+
+                # 从累计时长中减去转场时长（因为转场期间两个视频重叠）
+                accumulated_duration -= transition_duration
+
+            filter_complex = ";".join(filter_parts)
+            logger.info(f"xfade 滤镜链: {filter_complex}")
+
+            return filter_complex
+
+        except Exception as e:
+            logger.error(f"构建 xfade 滤镜链失败: {e}")
+            return None
 
     def _split_text_to_sentences(self, text: str, max_chars: int = 12) -> List[str]:
         """
