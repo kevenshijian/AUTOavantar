@@ -20,13 +20,10 @@ import re
 # 字幕最大字符数
 MAX_CHARS_PER_SUBTITLE = 12
 
-# 中文字符标点符号（用于拆分字幕）
-# 包含常见的中文和英文标点符号
-# 注意：使用转义引号避免语法错误
+# 中文字符标点符号（用于拆分字幕，但不显示在字幕中）
 CHINESE_PUNCTUATION = "，。！？；：、,.!?;:）】》\"'」』～~—…"
 
 # 标点符号正则表达式（用于拆分包含标点的 token）
-# 包含常见的中文和英文标点符号
 PUNCTUATION_PATTERN = re.compile(r'([，。！？；：、,.!?;:）】》"\'」』～~—…])')
 
 
@@ -75,13 +72,13 @@ def convert_timestamps_to_srt(
     将字/词级时间戳转换为 SRT 字幕条目
 
     策略：
-    1. 使用 full_text 作为字幕文本来源（确保完整性）
-    2. 使用 time_stamps 提供每个字符的时间信息
-    3. 首先按标点符号分段，其次按字数限制
+    1. 直接使用 time_stamps 的时间信息（确保时间准确）
+    2. 按标点符号分段（遇到标点就拆分）
+    3. 不显示标点符号（从字幕文本中移除）
 
     Args:
         time_stamps: 字/词级时间戳列表，每个元素包含 text, start_time, end_time
-        full_text: 完整文案文本（用于确保字幕完整性）
+        full_text: 完整文案文本（可选，用于辅助验证）
         max_chars: 每条字幕最大字符数，默认 12
 
     Returns:
@@ -90,155 +87,107 @@ def convert_timestamps_to_srt(
     if not time_stamps:
         return []
 
-    # 构建字符到时间戳的映射
-    # time_stamps 中的每个 item 包含 text（可能是单字符或多字符）和时间
-    char_time_map = {}  # 字符索引 -> (start_time, end_time)
+    # 第一步：将所有时间戳展开为单个字符级别的时间戳
+    # 这样可以确保每个字符都有准确的时间
+    char_timestamps: List[tuple] = []  # (char, start_time, end_time)
 
-    char_index = 0
     for ts in time_stamps:
         token_text = ts.text
         token_start = ts.start_time
         token_end = ts.end_time
 
-        # 计算每个字符的时间（均匀分配）
+        # 如果 token 包含多个字符（可能包含标点），需要拆分
         if len(token_text) == 1:
-            char_time_map[char_index] = (token_start, token_end)
-            char_index += 1
+            char_timestamps.append((token_text, token_start, token_end))
         else:
-            # 多字符 token，按字符数均匀分配时间
+            # 拆分多字符 token
+            parts = _split_token_with_punctuation(token_text)
+            # 计算每个部分的时间（按字符数均匀分配）
             duration = token_end - token_start
-            for i, ch in enumerate(token_text):
-                ch_start = token_start + (i / len(token_text)) * duration
-                ch_end = token_start + ((i + 1) / len(token_text)) * duration
-                char_time_map[char_index] = (ch_start, ch_end)
-                char_index += 1
+            total_chars = len(parts)
 
-    # 使用 full_text 作为字幕文本（如果提供）
-    if full_text:
-        text_to_use = full_text
-    else:
-        # 从时间戳重建文本
-        text_to_use = "".join(ts.text for ts in time_stamps)
+            current_offset = 0
+            for i, part in enumerate(parts):
+                part_start = token_start + (current_offset / len(token_text)) * duration
+                part_end = token_start + ((current_offset + len(part)) / len(token_text)) * duration
+                # 对于单个字符的部分，直接使用
+                if len(part) == 1:
+                    char_timestamps.append((part, part_start, part_end))
+                else:
+                    # 多字符部分（不含标点），按字符分配时间
+                    for j, ch in enumerate(part):
+                        ch_start = part_start + (j / len(part)) * (part_end - part_start)
+                        ch_end = part_start + ((j + 1) / len(part)) * (part_end - part_start)
+                        char_timestamps.append((ch, ch_start, ch_end))
+                current_offset += len(part)
 
-    # 按标点符号分段
+    # 第二步：按标点符号分段，生成字幕条目
     subtitle_entries: List[SrtEntry] = []
-    current_text = ""
-    current_start_idx = 0
+    current_chars: List[tuple] = []  # 收集当前字幕的字符和时间
 
-    for i, char in enumerate(text_to_use):
-        if not current_text:
-            current_start_idx = i
+    for char, start_time, end_time in char_timestamps:
+        # 初始化当前字幕的起始时间
+        if not current_chars:
+            current_start_time = start_time
 
-        current_text += char
+        # 添加字符到当前字幕
+        current_chars.append((char, start_time, end_time))
 
         # 检查是否需要拆分
         should_split = False
 
-        # 条件 1：遇到标点符号（且当前字幕长度 > 1）
-        if char in CHINESE_PUNCTUATION and len(current_text) > 1:
+        # 条件 1：遇到标点符号（标点符号作为分段点，但不显示）
+        if char in CHINESE_PUNCTUATION:
             should_split = True
 
-        # 条件 2：达到最大字符数（且当前不是标点符号）
-        if len(current_text) >= max_chars and char not in CHINESE_PUNCTUATION:
+        # 条件 2：达到最大字符数（不含标点）
+        non_punct_chars = [c for c, _, _ in current_chars if c not in CHINESE_PUNCTUATION]
+        if len(non_punct_chars) >= max_chars and char not in CHINESE_PUNCTUATION:
             should_split = True
 
         # 执行拆分
         if should_split:
-            # 获取这段文本的时间范围
-            start_time, end_time = _get_time_range(char_time_map, current_start_idx, i)
-            subtitle_entries.append(SrtEntry(
-                text=current_text.strip(),
-                start_time=start_time,
-                end_time=end_time
-            ))
-            current_text = ""
+            # 提取字幕文本（不含标点符号）
+            subtitle_text = ''.join(c for c, _, _ in current_chars if c not in CHINESE_PUNCTUATION)
+
+            if subtitle_text.strip():
+                # 获取时间范围：从第一个字符到最后一个非标点字符
+                non_punct_items = [(c, s, e) for c, s, e in current_chars if c not in CHINESE_PUNCTUATION]
+                if non_punct_items:
+                    actual_start = non_punct_items[0][1]
+                    actual_end = non_punct_items[-1][2]
+                else:
+                    actual_start = current_chars[0][1]
+                    actual_end = current_chars[-1][2]
+
+                subtitle_entries.append(SrtEntry(
+                    text=subtitle_text.strip(),
+                    start_time=actual_start,
+                    end_time=actual_end
+                ))
+
+            # 清空当前字幕
+            current_chars = []
 
     # 处理剩余的字符
-    if current_text.strip():
-        start_time, end_time = _get_time_range(char_time_map, current_start_idx, len(text_to_use) - 1)
-        subtitle_entries.append(SrtEntry(
-            text=current_text.strip(),
-            start_time=start_time,
-            end_time=end_time
-        ))
+    if current_chars:
+        subtitle_text = ''.join(c for c, _, _ in current_chars if c not in CHINESE_PUNCTUATION)
+        if subtitle_text.strip():
+            non_punct_items = [(c, s, e) for c, s, e in current_chars if c not in CHINESE_PUNCTUATION]
+            if non_punct_items:
+                actual_start = non_punct_items[0][1]
+                actual_end = non_punct_items[-1][2]
+            else:
+                actual_start = current_chars[0][1]
+                actual_end = current_chars[-1][2]
+
+            subtitle_entries.append(SrtEntry(
+                text=subtitle_text.strip(),
+                start_time=actual_start,
+                end_time=actual_end
+            ))
 
     return subtitle_entries
-
-
-def _get_time_range(char_time_map: Dict, start_idx: int, end_idx: int) -> tuple:
-    """
-    获取字符范围的时间范围
-
-    对于没有时间戳的字符，使用线性插值估算时间
-
-    Args:
-        char_time_map: 字符索引到时间的映射
-        start_idx: 起始字符索引
-        end_idx: 结束字符索引
-
-    Returns:
-        (start_time, end_time) 元组
-    """
-    if not char_time_map:
-        return (0.0, 0.3)
-
-    max_idx = max(char_time_map.keys())
-
-    # 获取起始时间
-    if start_idx in char_time_map:
-        start_time = char_time_map[start_idx][0]
-    elif start_idx <= max_idx:
-        # 在已知范围内，使用插值
-        # 找前一个和后一个有时间戳的字符
-        prev_idx = start_idx
-        while prev_idx >= 0 and prev_idx not in char_time_map:
-            prev_idx -= 1
-
-        next_idx = start_idx
-        while next_idx <= max_idx and next_idx not in char_time_map:
-            next_idx += 1
-
-        if prev_idx >= 0 and next_idx <= max_idx:
-            # 线性插值
-            prev_time = char_time_map[prev_idx][0]
-            next_time = char_time_map[next_idx][0]
-            ratio = (start_idx - prev_idx) / (next_idx - prev_idx) if next_idx != prev_idx else 0
-            start_time = prev_time + ratio * (next_time - prev_time)
-        elif prev_idx >= 0:
-            start_time = char_time_map[prev_idx][1]
-        else:
-            start_time = 0.0
-    else:
-        # 超出已知范围，使用最后一个时间戳的结束时间
-        start_time = char_time_map[max_idx][1]
-
-    # 获取结束时间
-    if end_idx in char_time_map:
-        end_time = char_time_map[end_idx][1]
-    elif end_idx <= max_idx:
-        # 在已知范围内，使用插值
-        prev_idx = end_idx
-        while prev_idx >= 0 and prev_idx not in char_time_map:
-            prev_idx -= 1
-
-        next_idx = end_idx
-        while next_idx <= max_idx and next_idx not in char_time_map:
-            next_idx += 1
-
-        if prev_idx >= 0 and next_idx <= max_idx:
-            prev_time = char_time_map[prev_idx][1]
-            next_time = char_time_map[next_idx][1]
-            ratio = (end_idx - prev_idx) / (next_idx - prev_idx) if next_idx != prev_idx else 0
-            end_time = prev_time + ratio * (next_time - prev_time)
-        elif prev_idx >= 0:
-            end_time = char_time_map[prev_idx][1]
-        else:
-            end_time = start_time + 0.3
-    else:
-        # 超出已知范围，估算时间（每字符约0.3秒）
-        end_time = start_time + 0.3 * (end_idx - start_idx + 1)
-
-    return (start_time, end_time)
 
 
 def format_srt_timestamp(seconds: float) -> str:
