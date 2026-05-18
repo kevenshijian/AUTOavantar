@@ -144,6 +144,23 @@ class PreciseSubtitleGenerator:
                 raise AlignmentError("强制对齐返回空结果")
             time_stamps = results[0].items
             logger.info(f"强制对齐完成，获得 {len(time_stamps)} 个字/词级时间戳")
+
+            # 添加调试日志：查看前10个时间戳的内容
+            for i, item in enumerate(time_stamps[:10]):
+                logger.info(f"  时间戳[{i}]: text='{item.text}', start={item.start_time:.3f}, end={item.end_time:.3f}")
+
+            # 统计时间戳中的标点符号数量
+            punct_count = sum(1 for item in time_stamps if item.text in '，。！？；：、,.!?;:）】》"\'」』～~—…')
+            logger.info(f"时间戳中包含 {punct_count} 个标点符号")
+
+            # 统计多字符 token 的数量
+            multi_char_count = sum(1 for item in time_stamps if len(item.text) > 1)
+            logger.info(f"时间戳中包含 {multi_char_count} 个多字符 token")
+
+            # 显示几个多字符 token 的内容
+            multi_char_items = [(item.text, item.start_time, item.end_time) for item in time_stamps if len(item.text) > 1][:5]
+            for text, start, end in multi_char_items:
+                logger.info(f"  多字符 token: '{text}' [{start:.3f} - {end:.3f}]")
         except Exception as e:
             logger.error(f"强制对齐失败：{e}")
             raise AlignmentError(f"Qwen3-ForcedAligner 对齐失败：{str(e)}")
@@ -158,6 +175,15 @@ class PreciseSubtitleGenerator:
                 max_chars=max_chars
             )
             logger.info("SRT 文件生成完成")
+
+            # 添加调试日志：查看生成的字幕内容
+            import os
+            if os.path.exists(output_srt_path):
+                with open(output_srt_path, 'r', encoding='utf-8') as f:
+                    srt_content = f.read()
+                    # 只显示前500字符
+                    preview = srt_content[:500] if len(srt_content) > 500 else srt_content
+                    logger.info(f"SRT 文件内容预览:\n{preview}")
         except Exception as e:
             logger.error(f"SRT 转换失败：{e}")
             raise
