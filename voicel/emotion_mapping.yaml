@@ -5,11 +5,11 @@
   vec4: 0.0
   vec5: 0.0
   vec6: 0.0
-  vec7: 0.1
+  vec7: 0.2
   vec8: 0.0
   speed: 1.0
 结束:
-  vec1: 0.1
+  vec1: 0.2
   vec2: 0.0
   vec3: 0.0
   vec4: 0.0
@@ -40,7 +40,7 @@
   speed: 1.06
 激动:
   vec1: 0.6
-  vec2: 0.4
+  vec2: 0.2
   vec3: 0.0
   vec4: 0.0
   vec5: 0.0
@@ -55,7 +55,7 @@
   vec4: 0.0
   vec5: 0.0
   vec6: 0.0
-  vec7: 0.6
+  vec7: 0.4
   vec8: 0.0
   speed: 1.05
 生气:
