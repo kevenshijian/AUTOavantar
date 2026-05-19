@@ -515,6 +515,7 @@ class SmartCutService:
                 use_motion=config.get("enable_motion", False),
                 use_brightness=config.get("enable_brightness", False),
                 use_pose=config.get("enable_pose", False),
+                min_segment_frames=min_segment_frames,
                 progress_callback=sync_progress_callback  # 传入同步回调
             )
 

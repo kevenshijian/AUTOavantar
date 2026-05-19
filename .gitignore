@@ -6,7 +6,6 @@ backend/logs/
 backend/output/
 backend/temp/
 backend/uploads/
-models/
 .bg-shell/
 
 __pycache__/
@@ -65,6 +64,7 @@ tf_download/
 *.mov
 *.onnx
 *.pth
+*.safetensors
 *.pt
 *.ckpt
 *.tar
