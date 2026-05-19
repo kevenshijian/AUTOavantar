@@ -126,7 +126,7 @@
               :loading="processing"
               @click="startCutting"
             >
-              <el-icon><Scissors /></el-icon>
+              <el-icon><Scissor /></el-icon>
               开始裁剪
             </el-button>
           </el-form-item>
@@ -336,7 +336,7 @@ import {
   UploadFilled,
   Loading,
   RefreshLeft,
-  Scissors,
+  Scissor,
   Check,
   Plus,
   Delete,
