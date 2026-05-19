@@ -556,6 +556,8 @@ class WorkflowService:
             "tts_emo_weight": getattr(config, 'tts_emo_weight', 0.8) if config else 0.8,
             "left_tts_speed": getattr(config, 'left_tts_speed', None) if config else None,
             "right_tts_speed": getattr(config, 'right_tts_speed', None) if config else None,
+            "left_tts_emo_weight": getattr(config, 'left_tts_emo_weight', None) if config else None,
+            "right_tts_emo_weight": getattr(config, 'right_tts_emo_weight', None) if config else None,
             "enable_subtitle": getattr(config, 'enable_subtitle', True) if config else True,
             "subtitle_font": getattr(config, 'subtitle_font', "SimHei") if config else "SimHei",
             "subtitle_size": getattr(config, 'subtitle_size', 24) if config else 24,
