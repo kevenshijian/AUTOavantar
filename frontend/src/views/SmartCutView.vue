@@ -91,10 +91,16 @@
         <template #header>
           <div class="card-header">
             <span>视频预览</span>
-            <el-button type="primary" text @click="resetUpload">
-              <el-icon><RefreshLeft /></el-icon>
-              重新选择
-            </el-button>
+            <div class="header-actions">
+              <el-button v-if="isFromHistory" type="primary" text @click="resetToHistory">
+                <el-icon><Back /></el-icon>
+                返回历史
+              </el-button>
+              <el-button type="primary" text @click="resetUpload">
+                <el-icon><RefreshLeft /></el-icon>
+                重新选择
+              </el-button>
+            </div>
           </div>
         </template>
 
@@ -391,7 +397,8 @@ import {
   VideoPlay,
   FolderAdd,
   Clock,
-  Document
+  Document,
+  Back
 } from '@element-plus/icons-vue'
 import { smartCutApi } from '@/services/api'
 
@@ -403,6 +410,7 @@ const currentTaskId = ref('')
 // 历史记录
 const historyList = ref([])
 const loadingHistory = ref(false)
+const isFromHistory = ref(false)
 
 // WebSocket 连接
 const ws = ref(null)
@@ -612,6 +620,7 @@ const resetUpload = () => {
   progressInfo.current_stage = ''
   taskFailed.value = false
   errorMessage.value = ''
+  isFromHistory.value = false
 }
 
 const startCutting = async () => {
@@ -871,6 +880,7 @@ const loadHistory = async () => {
 // 恢复历史记录详情
 const restoreHistory = async (item) => {
   currentTaskId.value = item.task_id
+  isFromHistory.value = true
   try {
     const res = await smartCutApi.getSegments(item.task_id)
     if (res.code === 200 && res.data.segments) {
@@ -889,6 +899,15 @@ const restoreHistory = async (item) => {
     console.error('恢复历史记录失败:', error)
     ElMessage.error('恢复历史记录失败')
   }
+}
+
+// 返回历史记录列表
+const resetToHistory = () => {
+  videoInfo.value = null
+  segments.value = []
+  currentTaskId.value = ''
+  isFromHistory.value = false
+  pendingSegments.value = []
 }
 
 // 删除历史记录
@@ -1006,16 +1025,28 @@ onUnmounted(() => {
   align-items: center;
 }
 
+.video-preview .header-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .video-container {
   background: #000;
   border-radius: 8px;
   overflow: hidden;
   margin-bottom: 16px;
+  height: 360px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .video-player {
-  width: 100%;
-  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
 }
 
 .video-info {
