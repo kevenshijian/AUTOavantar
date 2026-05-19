@@ -145,13 +145,22 @@ async def create_task(
                 message="视频文件不存在"
             )
 
-        # 3. 生成任务ID
-        task_id = generate_task_id()
-
-        # 4. 创建任务记录
+        # 3. 检查是否有进行中的任务使用同一视频
         from api.services.database import get_database_service
         db = get_database_service()
 
+        existing_task = await db.smart_cut_task_get_by_video_path(request.video_path)
+        if existing_task:
+            logger.warning(f"视频已有进行中的任务: {request.video_path} -> {existing_task['task_id']}")
+            return ApiResponse(
+                code=400,
+                message="当前视频已有裁剪任务正在进行中"
+            )
+
+        # 4. 生成任务ID
+        task_id = generate_task_id()
+
+        # 5. 创建任务记录
         await db.smart_cut_task_create({
             "task_id": task_id,
             "video_path": request.video_path,
@@ -167,7 +176,7 @@ async def create_task(
             "config": json.dumps(request.config)
         })
 
-        # 5. 启动异步识别任务
+        # 6. 启动异步识别任务
         background_tasks.add_task(
             run_smart_cut_task,
             task_id=task_id,

@@ -331,7 +331,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   UploadFilled,
   Loading,
@@ -747,8 +747,57 @@ const mergeVideos = async () => {
 }
 
 const saveToMaterial = () => {
-  ElMessage.info('保存到素材库功能开发中...')
-  // TODO: 实现保存到素材库
+  if (pendingSegments.value.length === 0) {
+    ElMessage.warning('请先添加片段到待处理列表')
+    return
+  }
+
+  // 使用 ElMessageBox 弹出选择框
+  ElMessageBox.confirm(
+    '请选择保存类型',
+    '保存到素材库',
+    {
+      confirmButtonText: '角色',
+      cancelButtonText: '场景',
+      distinguishCancelAndClose: true,
+      type: 'info'
+    }
+  ).then(() => {
+    // 选择"角色"
+    const videos = pendingSegments.value.map(s => ({
+      path: s.video_path,
+      name: s.segment_id,
+      duration: s.duration
+    }))
+    router.push({
+      path: '/materials',
+      query: {
+        action: 'create',
+        type: 'character',
+        videos: JSON.stringify(videos)
+      }
+    })
+    ElMessage.success('已跳转到角色创建页面')
+  }).catch((action) => {
+    if (action === 'cancel') {
+      // 选择"场景"
+      const videos = pendingSegments.value.map(s => ({
+        path: s.video_path,
+        name: s.segment_id,
+        duration: s.duration
+      }))
+      router.push({
+        path: '/materials',
+        query: {
+          action: 'create',
+          type: 'scene',
+          videos: JSON.stringify(videos)
+        }
+      })
+      ElMessage.success('已跳转到场景创建页面')
+    }
+    // 如果是 close（点击关闭按钮），不做任何操作
+  })
 }
 
 // 组件卸载时关闭 WebSocket

@@ -588,12 +588,14 @@
 
 <script setup>
 import { ref, computed, reactive, onMounted, onUnmounted, watch, inject } from 'vue'
+import { useRoute } from 'vue-router'
 import { materialApi } from '@/services/api'
 import { taskApi } from '@/services/api'
 import { uploadAPI } from '@/api/upload'
 import { ElMessage } from 'element-plus'
 import { useTagStore } from '@/stores/tagStore'
 
+const route = useRoute()
 const tagStore = useTagStore()
 
 // 场景标签选项（从默认标签组加载）
@@ -1921,13 +1923,54 @@ let cleanupThemeListener = null
 onMounted(() => {
   // 设置主题监听
   cleanupThemeListener = setupThemeListener()
-  
+
   // 加载素材列表
   loadMaterials()
 
   // 加载场景标签选项
   loadSceneTagOptions()
+
+  // 处理从智能裁剪传递的参数
+  handleSmartCutParams()
 })
+
+// 处理从智能裁剪传递的参数
+const handleSmartCutParams = () => {
+  const { action, type, videos } = route.query
+
+  if (action === 'create' && videos) {
+    try {
+      const videoList = JSON.parse(videos)
+      if (videoList && videoList.length > 0) {
+        // 切换到对应的 tab
+        if (type === 'character') {
+          currentTab.value = 'role'
+        } else if (type === 'scene') {
+          currentTab.value = 'scene'
+        }
+
+        // 打开创建对话框
+        openCreateDialog()
+
+        // 填充视频数据
+        if (type === 'character') {
+          // 角色创建：将视频添加到 loop_videos
+          createForm.loop_videos = videoList.map(v => v.path)
+          ElMessage.success(`已添加 ${videoList.length} 个视频到角色素材`)
+        } else if (type === 'scene') {
+          // 场景创建：将视频添加到 scene_videos
+          createForm.scene_videos = videoList.map(v => ({
+            path: v.path,
+            name: v.name || ''
+          }))
+          ElMessage.success(`已添加 ${videoList.length} 个视频到场景素材`)
+        }
+      }
+    } catch (e) {
+      console.error('解析智能裁剪参数失败:', e)
+    }
+  }
+}
 
 onUnmounted(() => {
   // 清理主题监听器

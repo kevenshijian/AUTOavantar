@@ -962,6 +962,19 @@ class DatabaseService:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
+    async def smart_cut_task_get_by_video_path(self, video_path: str) -> Optional[Dict[str, Any]]:
+        """根据视频路径获取进行中的智能裁剪任务"""
+        async with self.get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """SELECT * FROM smart_cut_tasks
+                   WHERE video_path = ? AND status IN ('pending', 'processing')
+                   ORDER BY created_at DESC LIMIT 1""",
+                (video_path,)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
 
 # 全局数据库服务实例
 _database_service: Optional[DatabaseService] = None

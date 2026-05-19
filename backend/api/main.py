@@ -179,6 +179,15 @@ async def lifespan(app: FastAPI):
     heartbeat_task = asyncio.create_task(websocket_heartbeat_checker())
     logger.info("WebSocket 心跳检测已启动")
 
+    # 3.1 清理过期临时文件（智能裁剪）
+    try:
+        from api.services.smart_cut_service import get_smart_cut_service
+        smart_cut_service = get_smart_cut_service()
+        smart_cut_service.cleanup_temp_files(max_age_hours=24)
+        logger.info("智能裁剪临时文件清理完成")
+    except Exception as e:
+        logger.warning(f"临时文件清理失败: {e}")
+
     # 4. 后台异步加载引擎（不阻塞 API 启动）
     engine_load_task = asyncio.create_task(load_engines_background(db))
     logger.info("引擎后台加载任务已启动")

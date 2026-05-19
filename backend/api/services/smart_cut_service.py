@@ -834,46 +834,37 @@ class SmartCutService:
                 logger.error("没有有效的片段文件")
                 return None
 
-            # 创建 concat 文件
-            concat_file = output_dir / f"concat_{timestamp}.txt"
-            with open(concat_file, "w") as f:
-                for seg_path in segment_files:
-                    f.write(f"file '{seg_path}'\n")
-
-            # 构建 FFmpeg 命令
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "concat",
-                "-safe", "0",
-                "-i", str(concat_file),
-                "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
-                "-r", str(fps),
-                "-c:v", "libx264",
-                "-preset", "medium",
-                "-crf", "23",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                str(output_path)
-            ]
-
-            # 如果有转场效果，使用更复杂的滤镜
-            if transition != "none" and len(segment_files) > 1:
-                # 简化处理：使用 xfade 滤镜
-                # 这里暂时使用基础拼接，转场效果可以后续优化
-                pass
-
             creation_flags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                creation_flags=creation_flags
-            )
 
-            # 清理 concat 文件
-            concat_file.unlink(missing_ok=True)
+            # 根据转场效果选择合成方式
+            if transition != "none" and len(segment_files) > 1:
+                # 使用 xfade 滤镜实现转场效果
+                result = self._merge_with_transition(
+                    segment_files=segment_files,
+                    output_path=str(output_path),
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    transition=transition,
+                    creation_flags=creation_flags
+                )
+                if not result:
+                    # 转场合成失败，回退到基础拼接
+                    logger.warning("转场合成失败，回退到基础拼接")
+                    transition = "none"
 
-            if result.returncode != 0:
-                logger.error(f"FFmpeg 合成失败: {result.stderr.decode()}")
+            if transition == "none" or len(segment_files) == 1:
+                # 基础拼接（无转场）
+                result = self._merge_basic(
+                    segment_files=segment_files,
+                    output_path=str(output_path),
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    creation_flags=creation_flags
+                )
+
+            if not result:
                 return None
 
             # 获取输出文件信息
@@ -891,6 +882,139 @@ class SmartCutService:
         except Exception as e:
             logger.error(f"合成视频失败: {e}")
             return None
+
+    def _merge_basic(
+        self,
+        segment_files: List[str],
+        output_path: str,
+        width: int,
+        height: int,
+        fps: int,
+        creation_flags: int
+    ) -> bool:
+        """基础拼接（无转场效果）"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        concat_file = Path(output_path).parent / f"concat_{timestamp}.txt"
+
+        try:
+            with open(concat_file, "w") as f:
+                for seg_path in segment_files:
+                    f.write(f"file '{seg_path}'\n")
+
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", str(concat_file),
+                "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
+                "-r", str(fps),
+                "-c:v", "libx264",
+                "-preset", "medium",
+                "-crf", "23",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                output_path
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, creation_flags=creation_flags)
+
+            if result.returncode != 0:
+                logger.error(f"FFmpeg 基础合成失败: {result.stderr.decode()}")
+                return False
+
+            return True
+
+        finally:
+            concat_file.unlink(missing_ok=True)
+
+    def _merge_with_transition(
+        self,
+        segment_files: List[str],
+        output_path: str,
+        width: int,
+        height: int,
+        fps: int,
+        transition: str,
+        creation_flags: int
+    ) -> bool:
+        """使用 xfade 滤镜实现转场效果"""
+        try:
+            # 转场映射
+            transition_map = {
+                "fade": "fade",
+                "wipe": "wipeleft"
+            }
+            xfade_transition = transition_map.get(transition, "fade")
+            transition_duration = 1.0  # 转场时长 1 秒
+
+            # 获取每个片段的时长
+            durations = []
+            for seg_file in segment_files:
+                duration = self._get_video_duration(seg_file)
+                durations.append(duration)
+
+            if len(durations) < 2:
+                return False
+
+            # 构建复杂滤镜链
+            # 第一步：将所有视频缩放到统一分辨率
+            inputs = []
+            filter_parts = []
+
+            for i, seg_file in enumerate(segment_files):
+                inputs.extend(["-i", seg_file])
+                # 缩放并设置帧率
+                filter_parts.append(
+                    f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                    f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
+                    f"fps={fps},setpts=PTS-STARTPTS[v{i}]"
+                )
+
+            # 第二步：使用 xfade 链接视频
+            # 第一个转场
+            offset = durations[0] - transition_duration
+            filter_parts.append(f"[v0][v1]xfade=transition={xfade_transition}:duration={transition_duration}:offset={offset}[v01]")
+
+            # 后续转场
+            prev_output = "v01"
+            for i in range(2, len(segment_files)):
+                # 计算偏移量：前面所有视频的总时长减去已使用的转场时长
+                offset = sum(durations[:i]) - transition_duration * i
+                curr_output = f"v0{i}" if i < 10 else f"v{i}"
+                filter_parts.append(
+                    f"[{prev_output}][v{i}]xfade=transition={xfade_transition}:"
+                    f"duration={transition_duration}:offset={offset}[{curr_output}]"
+                )
+                prev_output = curr_output
+
+            # 最终输出标签
+            final_output = prev_output
+
+            # 构建完整命令
+            cmd = ["ffmpeg", "-y"]
+            cmd.extend(inputs)
+            cmd.extend([
+                "-filter_complex", ";".join(filter_parts),
+                "-map", f"[{final_output}]",
+                "-c:v", "libx264",
+                "-preset", "medium",
+                "-crf", "23",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                output_path
+            ])
+
+            result = subprocess.run(cmd, capture_output=True, creation_flags=creation_flags)
+
+            if result.returncode != 0:
+                logger.error(f"FFmpeg 转场合成失败: {result.stderr.decode()}")
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"转场合成异常: {e}")
+            return False
 
     def _get_video_duration(self, video_path: str) -> float:
         """获取视频时长"""
