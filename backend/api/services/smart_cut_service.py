@@ -376,6 +376,10 @@ class SmartCutService:
                 "task_id": task["task_id"],
                 "video_name": task["video_name"] or "未命名视频",
                 "video_duration": task["video_duration"] or 0,
+                "video_fps": task["video_fps"] or 0,
+                "video_width": task["video_width"] or 0,
+                "video_height": task["video_height"] or 0,
+                "total_frames": task["total_frames"] or 0,
                 "segments_count": len(segments_info),
                 "created_at": task["created_at"],
                 "status": task["status"]

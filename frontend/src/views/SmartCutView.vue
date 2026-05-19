@@ -877,7 +877,11 @@ const restoreHistory = async (item) => {
       segments.value = res.data.segments
       videoInfo.value = {
         video_name: item.video_name,
-        duration: item.video_duration
+        duration: item.video_duration,
+        fps: item.video_fps,
+        width: item.video_width,
+        height: item.video_height,
+        total_frames: item.total_frames
       }
       ElMessage.success('已恢复历史记录')
     }
