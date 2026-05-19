@@ -276,7 +276,10 @@ export const smartCutApi = {
   merge: (data) => request.post('/api/smart-cut/merge', data),
 
   // 删除任务
-  deleteTask: (taskId) => request.delete(`/api/smart-cut/tasks/${taskId}`)
+  deleteTask: (taskId) => request.delete(`/api/smart-cut/tasks/${taskId}`),
+
+  // 获取历史记录列表
+  getHistory: () => request.get('/api/smart-cut/history')
 }
 
 // 导出便捷方法

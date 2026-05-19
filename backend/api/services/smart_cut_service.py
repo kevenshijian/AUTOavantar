@@ -357,6 +357,32 @@ class SmartCutService:
             "segments": segments_info or []
         }
 
+    async def get_history(self) -> List[Dict[str, Any]]:
+        """
+        获取历史记录列表
+
+        Returns:
+            已完成的裁剪任务列表，按时间倒序排列
+        """
+        from api.services.database import get_database_service
+
+        db = get_database_service()
+        tasks = await db.smart_cut_task_get_completed()
+
+        history_list = []
+        for task in tasks:
+            segments_info = json.loads(task.get("segments_info") or "[]")
+            history_list.append({
+                "task_id": task["task_id"],
+                "video_name": task["video_name"] or "未命名视频",
+                "video_duration": task["video_duration"] or 0,
+                "segments_count": len(segments_info),
+                "created_at": task["created_at"],
+                "status": task["status"]
+            })
+
+        return history_list
+
     async def delete_task(self, task_id: str) -> bool:
         """
         删除任务及临时文件

@@ -984,6 +984,18 @@ class DatabaseService:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+    async def smart_cut_task_get_completed(self) -> List[Dict[str, Any]]:
+        """获取所有已完成的智能裁剪任务（历史记录）"""
+        async with self.get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """SELECT * FROM smart_cut_tasks
+                   WHERE status = 'completed'
+                   ORDER BY created_at DESC"""
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
 
 # 全局数据库服务实例
 _database_service: Optional[DatabaseService] = None

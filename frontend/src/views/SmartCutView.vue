@@ -5,6 +5,53 @@
       <p class="description">上传视频，智能识别分割点，快速提取精彩片段</p>
     </el-card>
 
+    <!-- 历史记录区域 -->
+    <el-card v-if="!videoInfo && !processing" class="history-section" v-loading="loadingHistory">
+      <template #header>
+        <div class="card-header">
+          <span><el-icon><Clock /></el-icon> 历史记录</span>
+          <el-button type="primary" text @click="loadHistory">
+            <el-icon><RefreshLeft /></el-icon>
+            刷新
+          </el-button>
+        </div>
+      </template>
+
+      <div v-if="historyList.length === 0" class="history-empty">
+        <el-empty description="暂无历史记录" :image-size="80" />
+      </div>
+
+      <div v-else class="history-grid">
+        <div
+          v-for="item in historyList"
+          :key="item.task_id"
+          class="history-card"
+          @click="restoreHistory(item)"
+        >
+          <div class="history-icon">
+            <el-icon :size="32"><Document /></el-icon>
+          </div>
+          <div class="history-info">
+            <div class="history-name">{{ item.video_name }}</div>
+            <div class="history-meta">
+              <span>{{ item.segments_count }} 个片段</span>
+              <span>{{ formatDuration(item.video_duration) }}</span>
+            </div>
+            <div class="history-time">{{ formatDateTime(item.created_at) }}</div>
+          </div>
+          <el-button
+            type="danger"
+            size="small"
+            circle
+            class="history-delete"
+            @click.stop="deleteHistory(item.task_id)"
+          >
+            <el-icon><Delete /></el-icon>
+          </el-button>
+        </div>
+      </div>
+    </el-card>
+
     <!-- 上传区域 -->
     <el-card v-if="!videoInfo" class="upload-section">
       <el-upload
@@ -342,7 +389,9 @@ import {
   Delete,
   Close,
   VideoPlay,
-  FolderAdd
+  FolderAdd,
+  Clock,
+  Document
 } from '@element-plus/icons-vue'
 import { smartCutApi } from '@/services/api'
 
@@ -350,6 +399,10 @@ const router = useRouter()
 
 // 当前任务ID
 const currentTaskId = ref('')
+
+// 历史记录
+const historyList = ref([])
+const loadingHistory = ref(false)
 
 // WebSocket 连接
 const ws = ref(null)
@@ -800,6 +853,82 @@ const saveToMaterial = () => {
   })
 }
 
+// 加载历史记录
+const loadHistory = async () => {
+  loadingHistory.value = true
+  try {
+    const res = await smartCutApi.getHistory()
+    if (res.code === 200) {
+      historyList.value = res.data.history || []
+    }
+  } catch (error) {
+    console.error('加载历史记录失败:', error)
+  } finally {
+    loadingHistory.value = false
+  }
+}
+
+// 恢复历史记录详情
+const restoreHistory = async (item) => {
+  currentTaskId.value = item.task_id
+  try {
+    const res = await smartCutApi.getSegments(item.task_id)
+    if (res.code === 200 && res.data.segments) {
+      segments.value = res.data.segments
+      videoInfo.value = {
+        video_name: item.video_name,
+        duration: item.video_duration
+      }
+      ElMessage.success('已恢复历史记录')
+    }
+  } catch (error) {
+    console.error('恢复历史记录失败:', error)
+    ElMessage.error('恢复历史记录失败')
+  }
+}
+
+// 删除历史记录
+const deleteHistory = async (taskId) => {
+  try {
+    await ElMessageBox.confirm('确定要删除这条历史记录吗？相关的临时文件也会被清理。', '删除确认', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+
+    const res = await smartCutApi.deleteTask(taskId)
+    if (res.code === 200) {
+      historyList.value = historyList.value.filter(item => item.task_id !== taskId)
+      ElMessage.success('删除成功')
+    } else {
+      ElMessage.error(res.message || '删除失败')
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除历史记录失败:', error)
+      ElMessage.error('删除失败')
+    }
+  }
+}
+
+// 格式化日期时间
+const formatDateTime = (dateStr) => {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+// 组件挂载时加载历史记录
+onMounted(() => {
+  loadHistory()
+})
+
 // 组件卸载时关闭 WebSocket
 onUnmounted(() => {
   if (ws.value) {
@@ -1082,6 +1211,95 @@ onUnmounted(() => {
   gap: 12px;
 }
 
+/* 历史记录区域 */
+.history-section {
+  margin-top: 20px;
+}
+
+.history-section .card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.history-section .card-header span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-empty {
+  padding: 20px;
+}
+
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.history-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s;
+  position: relative;
+}
+
+.history-card:hover {
+  border-color: #409eff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+}
+
+.history-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f0f2f5;
+  border-radius: 8px;
+  color: #409eff;
+}
+
+.history-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.history-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #303133;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.history-time {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #c0c4cc;
+}
+
+.history-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
 /* 响应式 */
 @media (max-width: 992px) {
   .video-section {
@@ -1090,6 +1308,10 @@ onUnmounted(() => {
 
   .segments-grid {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+
+  .history-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

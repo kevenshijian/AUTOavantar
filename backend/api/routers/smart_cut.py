@@ -377,6 +377,31 @@ async def merge_videos(
         )
 
 
+@router.get("/history", response_model=ApiResponse)
+async def get_history():
+    """
+    获取历史记录列表
+
+    返回所有已完成的裁剪任务，按时间倒序排列
+    """
+    service = get_smart_cut_service()
+
+    try:
+        history = await service.get_history()
+        return ApiResponse(
+            code=200,
+            message="success",
+            data={"history": history}
+        )
+
+    except Exception as e:
+        logger.error(f"获取历史记录失败: {e}")
+        return ApiResponse(
+            code=500,
+            message=f"获取历史记录失败：{str(e)}"
+        )
+
+
 @router.delete("/tasks/{task_id}", response_model=ApiResponse)
 async def delete_task(task_id: str):
     """
