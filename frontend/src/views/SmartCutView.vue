@@ -423,7 +423,7 @@ const connectWebSocket = (taskId) => {
   }
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const wsUrl = `${protocol}//${window.location.host}/ws/${taskId}`
+  const wsUrl = `${protocol}//${window.location.host}/api/ws/${taskId}`
 
   ws.value = new WebSocket(wsUrl)
 

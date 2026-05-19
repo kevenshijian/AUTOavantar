@@ -466,6 +466,14 @@ class SmartCutService:
                 sys.path.insert(0, str(models_path))
                 from smart_segmenter import SmartVideoSegmenter
 
+            # 等待 WebSocket 连接建立（最多等待 3 秒）
+            logger.info(f"等待 WebSocket 连接: {task_id}")
+            connected = await ws_manager.wait_for_connection(task_id, timeout=3.0)
+            if connected:
+                logger.info(f"WebSocket 连接已建立: {task_id}")
+            else:
+                logger.warning(f"WebSocket 连接超时，继续执行任务: {task_id}")
+
             # 获取事件循环引用（用于在线程中调度回调）
             loop = asyncio.get_running_loop()
 
@@ -630,7 +638,9 @@ class SmartCutService:
             segment_path = output_dir / f"{segment_id}.mp4"
             thumbnail_path = output_dir / f"{segment_id}_thumb.jpg"
 
-            # 计算时间
+            # 计算时间（确保转换为 Python 原生类型）
+            start_frame = int(start_frame)  # 转换 numpy int32 为 Python int
+            end_frame = int(end_frame)
             start_time = start_frame / fps
             end_time = end_frame / fps
             duration = end_time - start_time
@@ -656,10 +666,10 @@ class SmartCutService:
                     "video_path": str(segment_path.relative_to(self.base_dir))
                 })
 
-            # 更新进度
+            # 更新进度（progress_callback 是 async 函数，需要 await）
             if progress_callback:
                 progress = 80 + int((i + 1) / total_segments * 15)
-                progress_callback(progress, f"生成片段 {i+1}/{total_segments}", 0, 0)
+                await progress_callback(progress, f"生成片段 {i+1}/{total_segments}", 0, 0)
 
         return segment_list
 

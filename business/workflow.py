@@ -500,28 +500,32 @@ class DigitalHumanWorkflow:
 
             # 创建语速处理器（使用路径管理器的音频目录）
             speed_processor = create_audio_speed_processor(self.audio_temp_dir)
-            
+
             if speed_processor:
                 if config.enable_double_mode:
                     # 双人模式：调节左右说话人的参考音频
+                    # 使用已标准化的 task 对象中的路径
+                    left_audio_path = task.left_prompt_audio_path
+                    right_audio_path = task.right_prompt_audio_path
+
                     left_speed = config.left_tts_speed if config.left_tts_speed is not None else config.tts_speed
                     right_speed = config.right_tts_speed if config.right_tts_speed is not None else config.tts_speed
-                    
+
                     # 调节左说话人参考音频
                     if left_speed != 1.0:
-                        logger.info(f"调节左说话人参考音频语速: {left_speed}x")
-                        adjusted_left_audio = speed_processor.adjust_speed(left_prompt_audio_path, left_speed)
+                        logger.info(f"调节左说话人参考音频语速: {left_speed}x, 路径: {left_audio_path}")
+                        adjusted_left_audio = speed_processor.adjust_speed(left_audio_path, left_speed)
                         if adjusted_left_audio:
                             left_prompt_audio_path = adjusted_left_audio
                             task.left_prompt_audio_path = adjusted_left_audio
                             logger.info(f"左说话人参考音频语速调节完成: {adjusted_left_audio}")
                         else:
                             logger.warning(f"左说话人参考音频语速调节失败，使用原始音频")
-                    
+
                     # 调节右说话人参考音频
                     if right_speed != 1.0:
-                        logger.info(f"调节右说话人参考音频语速: {right_speed}x")
-                        adjusted_right_audio = speed_processor.adjust_speed(right_prompt_audio_path, right_speed)
+                        logger.info(f"调节右说话人参考音频语速: {right_speed}x, 路径: {right_audio_path}")
+                        adjusted_right_audio = speed_processor.adjust_speed(right_audio_path, right_speed)
                         if adjusted_right_audio:
                             right_prompt_audio_path = adjusted_right_audio
                             task.right_prompt_audio_path = adjusted_right_audio
@@ -530,9 +534,11 @@ class DigitalHumanWorkflow:
                             logger.warning(f"右说话人参考音频语速调节失败，使用原始音频")
                 else:
                     # 单人模式：调节参考音频
+                    # 使用已标准化的 task 对象中的路径
+                    audio_path = task.prompt_audio_path
                     if config.tts_speed != 1.0:
-                        logger.info(f"调节参考音频语速: {config.tts_speed}x")
-                        adjusted_audio = speed_processor.adjust_speed(prompt_audio_path, config.tts_speed)
+                        logger.info(f"调节参考音频语速: {config.tts_speed}x, 路径: {audio_path}")
+                        adjusted_audio = speed_processor.adjust_speed(audio_path, config.tts_speed)
                         if adjusted_audio:
                             prompt_audio_path = adjusted_audio
                             task.prompt_audio_path = adjusted_audio
