@@ -527,12 +527,16 @@ class SmartCutService:
             )
 
             # 过滤短片段（小于最小片段帧数）
+            # 注意：default 片段是检测完成后的剩余部分，不过滤
+            filtered_count = len(segments)
             if min_segment_frames > 0:
                 original_count = len(segments)
-                segments = [s for s in segments if (s[1] - s[0]) >= min_segment_frames]
-                logger.info(f"片段过滤：{original_count} -> {len(segments)}（最小帧数：{min_segment_frames}）")
+                segments = [s for s in segments if s[2] == 'default' or (s[1] - s[0]) >= min_segment_frames]
+                filtered_count = len(segments)
+                logger.info(f"片段过滤：{original_count} -> {filtered_count}（最小帧数：{min_segment_frames}，保留 default 片段）")
 
-            await update_progress(80, "生成片段文件", total_frames, total_frames)
+            # 报告过滤后的片段数量
+            await update_progress(80, f"分割完成，共 {filtered_count} 个片段", total_frames, total_frames)
 
             # 生成片段视频和缩略图
             segment_list = await self._generate_segment_files(
