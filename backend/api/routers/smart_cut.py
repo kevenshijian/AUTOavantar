@@ -161,20 +161,17 @@ async def create_task(
         task_id = generate_task_id()
 
         # 5. 创建任务记录
-        await db.smart_cut_task_create({
-            "task_id": task_id,
-            "video_path": request.video_path,
-            "video_name": request.video_name,
-            "video_duration": request.duration,
-            "video_fps": request.fps,
-            "video_width": request.width,
-            "video_height": request.height,
-            "total_frames": request.total_frames,
-            "status": "pending",
-            "progress": 0,
-            "current_stage": "准备中",
-            "config": json.dumps(request.config)
-        })
+        await db.smart_cut_task_create(
+            task_id=task_id,
+            video_path=request.video_path,
+            video_name=request.video_name,
+            video_duration=request.duration,
+            video_fps=request.fps,
+            video_width=request.width,
+            video_height=request.height,
+            total_frames=request.total_frames,
+            config=request.config
+        )
 
         # 6. 启动异步识别任务
         background_tasks.add_task(

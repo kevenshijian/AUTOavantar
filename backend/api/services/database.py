@@ -850,45 +850,54 @@ class DatabaseService:
     async def smart_cut_task_update(
         self,
         task_id: str,
-        status: Optional[str] = None,
-        progress: Optional[int] = None,
-        current_stage: Optional[str] = None,
-        segments_info: Optional[List[Dict]] = None,
-        error_message: Optional[str] = None
+        updates: Optional[Dict[str, Any]] = None,
+        **kwargs
     ) -> bool:
-        """更新智能裁剪任务"""
+        """更新智能裁剪任务
+
+        Args:
+            task_id: 任务ID
+            updates: 更新字段字典，支持 status, progress, current_stage, segments_info, error_message
+            **kwargs: 也可以直接传递字段名作为关键字参数
+        """
+        # 合并字典参数和关键字参数
+        if updates is None:
+            updates = kwargs
+
         async with self.get_connection() as conn:
             cursor = await conn.cursor()
             now = datetime.now().isoformat()
 
-            updates = []
+            update_parts = []
             values = []
 
-            if status is not None:
-                updates.append("status = ?")
-                values.append(status)
-            if progress is not None:
-                updates.append("progress = ?")
-                values.append(progress)
-            if current_stage is not None:
-                updates.append("current_stage = ?")
-                values.append(current_stage)
-            if segments_info is not None:
-                updates.append("segments_info = ?")
-                values.append(json.dumps(segments_info, ensure_ascii=False))
-            if error_message is not None:
-                updates.append("error_message = ?")
-                values.append(error_message)
+            # 支持的字段
+            field_mapping = {
+                "status": "status",
+                "progress": "progress",
+                "current_stage": "current_stage",
+                "segments_info": "segments_info",
+                "error_message": "error_message"
+            }
 
-            if not updates:
+            for key, column in field_mapping.items():
+                if key in updates and updates[key] is not None:
+                    update_parts.append(f"{column} = ?")
+                    # segments_info 需要序列化
+                    if key == "segments_info" and not isinstance(updates[key], str):
+                        values.append(json.dumps(updates[key], ensure_ascii=False))
+                    else:
+                        values.append(updates[key])
+
+            if not update_parts:
                 return False
 
-            updates.append("updated_at = ?")
+            update_parts.append("updated_at = ?")
             values.append(now)
             values.append(task_id)
 
             await cursor.execute(
-                f"UPDATE smart_cut_tasks SET {', '.join(updates)} WHERE task_id = ?",
+                f"UPDATE smart_cut_tasks SET {', '.join(update_parts)} WHERE task_id = ?",
                 values
             )
             await conn.commit()

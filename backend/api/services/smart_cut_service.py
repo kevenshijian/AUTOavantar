@@ -90,8 +90,8 @@ class SmartCutService:
                 video_path
             ]
 
-            creation_flags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-            result = subprocess.run(cmd, capture_output=True, text=True, creation_flags=creation_flags)
+            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=creationflags)
 
             if result.returncode != 0:
                 logger.error(f"ffprobe 失败: {result.stderr}")
@@ -674,11 +674,11 @@ class SmartCutService:
                 output_path
             ]
 
-            creation_flags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
             result = subprocess.run(
                 cmd,
                 capture_output=True,
-                creation_flags=creation_flags
+                creationflags=creationflags
             )
 
             if result.returncode != 0:
@@ -735,11 +735,11 @@ class SmartCutService:
                 str(audio_path)
             ]
 
-            creation_flags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
             result = subprocess.run(
                 cmd,
                 capture_output=True,
-                creation_flags=creation_flags
+                creationflags=creationflags
             )
 
             if result.returncode != 0:
@@ -771,8 +771,8 @@ class SmartCutService:
                 audio_path
             ]
 
-            creation_flags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-            result = subprocess.run(cmd, capture_output=True, text=True, creation_flags=creation_flags)
+            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=creationflags)
 
             if result.returncode != 0:
                 return 0.0
@@ -834,7 +834,7 @@ class SmartCutService:
                 logger.error("没有有效的片段文件")
                 return None
 
-            creation_flags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
 
             # 根据转场效果选择合成方式
             if transition != "none" and len(segment_files) > 1:
@@ -846,7 +846,7 @@ class SmartCutService:
                     height=height,
                     fps=fps,
                     transition=transition,
-                    creation_flags=creation_flags
+                    creationflags=creationflags
                 )
                 if not result:
                     # 转场合成失败，回退到基础拼接
@@ -861,7 +861,7 @@ class SmartCutService:
                     width=width,
                     height=height,
                     fps=fps,
-                    creation_flags=creation_flags
+                    creationflags=creationflags
                 )
 
             if not result:
@@ -890,7 +890,7 @@ class SmartCutService:
         width: int,
         height: int,
         fps: int,
-        creation_flags: int
+        creationflags: int
     ) -> bool:
         """基础拼接（无转场效果）"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -916,7 +916,7 @@ class SmartCutService:
                 output_path
             ]
 
-            result = subprocess.run(cmd, capture_output=True, creation_flags=creation_flags)
+            result = subprocess.run(cmd, capture_output=True, creationflags=creationflags)
 
             if result.returncode != 0:
                 logger.error(f"FFmpeg 基础合成失败: {result.stderr.decode()}")
@@ -935,7 +935,7 @@ class SmartCutService:
         height: int,
         fps: int,
         transition: str,
-        creation_flags: int
+        creationflags: int
     ) -> bool:
         """使用 xfade 滤镜实现转场效果"""
         try:
@@ -1004,7 +1004,7 @@ class SmartCutService:
                 output_path
             ])
 
-            result = subprocess.run(cmd, capture_output=True, creation_flags=creation_flags)
+            result = subprocess.run(cmd, capture_output=True, creationflags=creationflags)
 
             if result.returncode != 0:
                 logger.error(f"FFmpeg 转场合成失败: {result.stderr.decode()}")
@@ -1026,8 +1026,8 @@ class SmartCutService:
                 video_path
             ]
 
-            creation_flags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-            result = subprocess.run(cmd, capture_output=True, text=True, creation_flags=creation_flags)
+            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=creationflags)
 
             if result.returncode != 0:
                 return 0.0

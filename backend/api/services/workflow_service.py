@@ -450,7 +450,7 @@ class WorkflowService:
             transition_random_all=kwargs.get("transition_random_all", False),
             transition_duration=kwargs.get("transition_duration", 0.5)
         )
-        logger.info(f"TaskConfig 创建完成: inference_batch_size={config.inference_batch_size}, heygem_steps 参数值={heygem_steps}")
+        logger.info(f"TaskConfig 创建完成: tts_speed={tts_speed}, tts_emo_weight={tts_emo_weight}, left_tts_speed={left_tts_speed}, right_tts_speed={right_tts_speed}, left_tts_emo_weight={left_tts_emo_weight}, right_tts_emo_weight={right_tts_emo_weight}, enable_double_mode={enable_double_mode}")
         logger.info(f"转场效果配置: enable_transition={config.enable_transition}, transition_type={config.transition_type}, transition_effect={config.transition_effect}, transition_random={config.transition_random}, transition_random_all={config.transition_random_all}, transition_duration={config.transition_duration}")
         task.config = config
 

@@ -526,6 +526,7 @@ class AudioProcessor:
                         segment_speed = config.tts_speed
                         segment_emo_weight = config.tts_emo_weight
                         if config.enable_double_mode:
+                            logger.info(f"双人模式参数: left_tts_speed={config.left_tts_speed}, left_tts_emo_weight={config.left_tts_emo_weight}, right_tts_speed={config.right_tts_speed}, right_tts_emo_weight={config.right_tts_emo_weight}")
                             if segment.speaker == "left":
                                 if config.left_tts_speed is not None:
                                     segment_speed = config.left_tts_speed
@@ -536,6 +537,7 @@ class AudioProcessor:
                                     segment_speed = config.right_tts_speed
                                 if config.right_tts_emo_weight is not None:
                                     segment_emo_weight = config.right_tts_emo_weight
+                        logger.info(f"段落 {segment.segment_id} 使用的参数: segment_speed={segment_speed}, segment_emo_weight={segment_emo_weight}")
 
                         result = self.synthesize_segment(
                             segment=segment,

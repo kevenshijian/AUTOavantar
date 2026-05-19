@@ -1,0 +1,58 @@
+2026-05-19 10:55:38,979 - business.audio.audio_processor - INFO - 合成段落 seg_008 (说话人: left, 尝试 1/3)
+2026-05-19 10:55:38,979 - business.audio.audio_processor - INFO - 段落 seg_008 标签: 兴奋, 强度: 0.5
+2026-05-19 10:55:38,979 - business.audio.audio_processor - INFO - 使用 TTSEngine 引擎模式合成段落 seg_008
+2026-05-19 10:55:38,979 - autoavantar.tts_engine - DEBUG - 情绪向量: emotion=兴奋, intensity=0.5, vector=[0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0], speed=1.05
+2026-05-19 10:55:38,980 - autoavantar.tts_engine - INFO - 调整参考音频速度: speed=1.05
+2026-05-19 10:55:38,980 - autoavantar.tts_engine - DEBUG - 执行 ffmpeg 命令调整音频速度: ['ffmpeg', '-y', '-i', 'D:\\AI\\AUTOavantar\\backend\\uploads\\audios\\reference\\9093c9af_reference.wav', '-filter:a', 'atempo=1.05', '-c:a', 'pcm_s16le', 'D:\\AI\\AUTOavantar\\temp\\audio\\tts_speed_1779159338980_9093c9af_reference.wav']
+2026-05-19 10:55:39,043 - autoavantar.tts_engine - INFO - 音频速度调整完成: speed=1.05, 输出=D:\AI\AUTOavantar\temp\audio\tts_speed_1779159338980_9093c9af_reference.wav
+2026-05-19 10:55:39,043 - autoavantar.tts_engine - INFO - 使用调整后的参考音频: D:\AI\AUTOavantar\temp\audio\tts_speed_1779159338980_9093c9af_reference.wav
+2026-05-19 10:55:39,044 - autoavantar.tts_engine - INFO - 开始语音合成: text=这是兴奋的情绪，太令人期待了！..., voice=D:\AI\AUTOavantar\temp\audio\tts_speed_1779159338980_9093c9af_reference.wav, output=D:\AI\AUTOavantar\backend\output\temp\audio\cffe5cac_audio_seg_008.wav
+2026-05-19 10:55:41,980 - autoavantar.tts_engine - INFO - 语音合成完成: D:\AI\AUTOavantar\backend\output\temp\audio\cffe5cac_audio_seg_008.wav
+2026-05-19 10:55:41,980 - autoavantar.tts_engine - DEBUG - 已清理临时音频文件: D:\AI\AUTOavantar\temp\audio\tts_speed_1779159338980_9093c9af_reference.wav
+2026-05-19 10:55:41,981 - business.audio.audio_processor - INFO - 段落 seg_008 合成成功
+2026-05-19 10:55:41,981 - workflow_service - INFO - schedule_progress: task_id=cffe5cac, progress=15.9, stage=语音合成中 (9/46) - 处理标签：兴奋, main_loop=<ProactorEventLoop running=True closed=False debug=False>, is_running=True
+2026-05-19 10:55:41,981 - workflow_service - INFO - schedule_progress: callback=TaskCallback(on_status_change=<function WebSocketNotifier.create_task_callback.<locals>.on_status_change at 0x0000000044AF4820>, on_progress=<function WebSocketNotifier.create_task_callback.<locals>.on_progress at 0x0000000044AF5120>, on_complete=<function WebSocketNotifier.create_task_callback.<locals>.on_complete at 0x0000000044AF5090>, on_error=<function WebSocketNotifier.create_task_callback.<locals>.on_error at 0x0000000044AF4F70>), on_progress=<function WebSocketNotifier.create_task_callback.<locals>.on_progress at 0x0000000044AF5120>
+2026-05-19 10:55:41,981 - workflow_service - INFO - 进度更新协程已提交: task_id=cffe5cac, progress=15.9, stage=语音合成中 (9/46) - 处理标签：兴奋
+2026-05-19 10:55:41,981 - websocket_notifier - INFO - on_progress 被调用: task_id=cffe5cac, progress=15.9, stage=语音合成中 (9/46) - 处理标签：兴奋
+2026-05-19 10:55:41,982 - websocket - INFO - broadcast_status_update: 准备发送, task_id=cffe5cac, status=processing, progress=15.9
+2026-05-19 10:55:41,982 - websocket - INFO - broadcast_to_task: task_id=cffe5cac, connections={<starlette.websockets.WebSocket object at 0x00000000440A7CD0>}
+2026-05-19 10:55:41,982 - websocket - INFO - broadcast_to_task: 消息已发送到 websocket, task_id=cffe5cac
+2026-05-19 10:55:41,983 - websocket - INFO - broadcast_to_task: 共发送 1 条消息, task_id=cffe5cac
+2026-05-19 10:55:41,983 - websocket - INFO - broadcast_status_update: 发送完成, task_id=cffe5cac
+2026-05-19 10:55:41,983 - websocket_notifier - INFO - on_progress 完成: task_id=cffe5cac
+2026-05-19 10:55:41,983 - aiosqlite - DEBUG - executing functools.partial(<built-in method cursor of sqlite3.Connection object at 0x0000000042EE4E40>)
+2026-05-19 10:55:41,983 - aiosqlite - DEBUG - operation functools.partial(<built-in method cursor of sqlite3.Connection object at 0x0000000042EE4E40>) completed
+2026-05-19 10:55:41,984 - aiosqlite - DEBUG - executing functools.partial(<built-in method execute of sqlite3.Cursor object at 0x000000006A5EBA40>, 'UPDATE tasks SET progress = ?, current_stage = ?, updated_at = ? WHERE task_id = ?', [15.9, '语音合成中 (9/46) - 处理标签：兴奋', '2026-05-19T10:55:41.984442', 'cffe5cac'])
+2026-05-19 10:55:41,984 - aiosqlite - DEBUG - operation functools.partial(<built-in method execute of sqlite3.Cursor object at 0x000000006A5EBA40>, 'UPDATE tasks SET progress = ?, current_stage = ?, updated_at = ? WHERE task_id = ?', [15.9, '语音合成中 (9/46) - 处理标签：兴奋', '2026-05-19T10:55:41.984442', 'cffe5cac']) completed
+2026-05-19 10:55:41,985 - aiosqlite - DEBUG - executing functools.partial(<built-in method commit of sqlite3.Connection object at 0x0000000042EE4E40>)
+2026-05-19 10:55:41,992 - aiosqlite - DEBUG - operation functools.partial(<built-in method commit of sqlite3.Connection object at 0x0000000042EE4E40>) completed
+2026-05-19 10:55:41,992 - database_service - INFO - 任务更新成功: cffe5cac
+2026-05-19 10:55:42,491 - business.audio.audio_processor - INFO - 合成段落 seg_009 (说话人: right, 尝试 1/3)
+2026-05-19 10:55:42,491 - business.audio.audio_processor - INFO - 段落 seg_009 标签: 兴奋, 强度: 0.5
+2026-05-19 10:55:42,491 - business.audio.audio_processor - INFO - 使用 TTSEngine 引擎模式合成段落 seg_009
+2026-05-19 10:55:42,492 - autoavantar.tts_engine - DEBUG - 情绪向量: emotion=兴奋, intensity=0.5, vector=[0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.0], speed=1.05
+2026-05-19 10:55:42,492 - autoavantar.tts_engine - INFO - 调整参考音频速度: speed=1.05
+2026-05-19 10:55:42,492 - autoavantar.tts_engine - DEBUG - 执行 ffmpeg 命令调整音频速度: ['ffmpeg', '-y', '-i', 'D:\\AI\\AUTOavantar\\backend\\uploads\\audios\\reference\\6a8751e1_reference.wav', '-filter:a', 'atempo=1.05', '-c:a', 'pcm_s16le', 'D:\\AI\\AUTOavantar\\temp\\audio\\tts_speed_1779159342492_6a8751e1_reference.wav']
+2026-05-19 10:55:42,555 - autoavantar.tts_engine - INFO - 音频速度调整完成: speed=1.05, 输出=D:\AI\AUTOavantar\temp\audio\tts_speed_1779159342492_6a8751e1_reference.wav
+2026-05-19 10:55:42,555 - autoavantar.tts_engine - INFO - 使用调整后的参考音频: D:\AI\AUTOavantar\temp\audio\tts_speed_1779159342492_6a8751e1_reference.wav
+2026-05-19 10:55:42,556 - autoavantar.tts_engine - INFO - 开始语音合成: text=这是兴奋的情绪，太令人期待了！..., voice=D:\AI\AUTOavantar\temp\audio\tts_speed_1779159342492_6a8751e1_reference.wav, output=D:\AI\AUTOavantar\backend\output\temp\audio\cffe5cac_audio_seg_009.wav
+2026-05-19 10:55:45,404 - autoavantar.tts_engine - INFO - 语音合成完成: D:\AI\AUTOavantar\backend\output\temp\audio\cffe5cac_audio_seg_009.wav
+2026-05-19 10:55:45,404 - autoavantar.tts_engine - DEBUG - 已清理临时音频文件: D:\AI\AUTOavantar\temp\audio\tts_speed_1779159342492_6a8751e1_reference.wav
+2026-05-19 10:55:45,405 - business.audio.audio_processor - INFO - 段落 seg_009 合成成功
+2026-05-19 10:55:45,405 - workflow_service - INFO - schedule_progress: task_id=cffe5cac, progress=16.5, stage=语音合成中 (10/46) - 处理标签：兴奋, main_loop=<ProactorEventLoop running=True closed=False debug=False>, is_running=True
+2026-05-19 10:55:45,405 - workflow_service - INFO - schedule_progress: callback=TaskCallback(on_status_change=<function WebSocketNotifier.create_task_callback.<locals>.on_status_change at 0x0000000044AF4820>, on_progress=<function WebSocketNotifier.create_task_callback.<locals>.on_progress at 0x0000000044AF5120>, on_complete=<function WebSocketNotifier.create_task_callback.<locals>.on_complete at 0x0000000044AF5090>, on_error=<function WebSocketNotifier.create_task_callback.<locals>.on_error at 0x0000000044AF4F70>), on_progress=<function WebSocketNotifier.create_task_callback.<locals>.on_progress at 0x0000000044AF5120>
+2026-05-19 10:55:45,405 - workflow_service - INFO - 进度更新协程已提交: task_id=cffe5cac, progress=16.5, stage=语音合成中 (10/46) - 处理标签：兴奋
+2026-05-19 10:55:45,406 - websocket_notifier - INFO - on_progress 被调用: task_id=cffe5cac, progress=16.5, stage=语音合成中 (10/46) - 处理标签：兴奋
+2026-05-19 10:55:45,406 - websocket - INFO - broadcast_status_update: 准备发送, task_id=cffe5cac, status=processing, progress=16.5
+2026-05-19 10:55:45,406 - websocket - INFO - broadcast_to_task: task_id=cffe5cac, connections={<starlette.websockets.WebSocket object at 0x00000000440A7CD0>}
+2026-05-19 10:55:45,407 - websocket - INFO - broadcast_to_task: 消息已发送到 websocket, task_id=cffe5cac
+2026-05-19 10:55:45,407 - websocket - INFO - broadcast_to_task: 共发送 1 条消息, task_id=cffe5cac
+2026-05-19 10:55:45,407 - websocket - INFO - broadcast_status_update: 发送完成, task_id=cffe5cac
+2026-05-19 10:55:45,407 - websocket_notifier - INFO - on_progress 完成: task_id=cffe5cac
+2026-05-19 10:55:45,408 - aiosqlite - DEBUG - executing functools.partial(<built-in method cursor of sqlite3.Connection object at 0x0000000042EE4E40>)
+2026-05-19 10:55:45,408 - aiosqlite - DEBUG - operation functools.partial(<built-in method cursor of sqlite3.Connection object at 0x0000000042EE4E40>) completed
+2026-05-19 10:55:45,408 - aiosqlite - DEBUG - executing functools.partial(<built-in method execute of sqlite3.Cursor object at 0x000000006A5EBAC0>, 'UPDATE tasks SET progress = ?, current_stage = ?, updated_at = ? WHERE task_id = ?', [16.5, '语音合成中 (10/46) - 处理标签：兴奋', '2026-05-19T10:55:45.408313', 'cffe5cac'])
+2026-05-19 10:55:45,409 - aiosqlite - DEBUG - operation functools.partial(<built-in method execute of sqlite3.Cursor object at 0x000000006A5EBAC0>, 'UPDATE tasks SET progress = ?, current_stage = ?, updated_at = ? WHERE task_id = ?', [16.5, '语音合成中 (10/46) - 处理标签：兴奋', '2026-05-19T10:55:45.408313', 'cffe5cac']) completed
+2026-05-19 10:55:45,409 - aiosqlite - DEBUG - executing functools.partial(<built-in method commit of sqlite3.Connection object at 0x0000000042EE4E40>)
+2026-05-19 10:55:45,417 - aiosqlite - DEBUG - operation functools.partial(<built-in method commit of sqlite3.Connection object at 0x0000000042EE4E40>) completed
+2026-05-19 10:55:45,417 - database_service - INFO - 任务更新成功: cffe5cac

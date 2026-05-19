@@ -72,6 +72,13 @@ class TaskConfig(BaseModel):
     # TTS 配置
     tts_speed: float = Field(default=1.0, ge=0.8, le=1.2, description="语速 (0.8-1.2)")
     tts_emo_weight: float = Field(default=0.8, ge=0.1, le=1.2, description="情感权重")
+
+    # 双人模式 TTS 配置
+    enable_double_mode: bool = Field(default=False, description="是否启用双人模式")
+    left_tts_speed: Optional[float] = Field(default=None, ge=0.8, le=1.2, description="左说话人语速 (双人模式)")
+    right_tts_speed: Optional[float] = Field(default=None, ge=0.8, le=1.2, description="右说话人语速 (双人模式)")
+    left_tts_emo_weight: Optional[float] = Field(default=None, ge=0.1, le=1.2, description="左说话人情感权重 (双人模式)")
+    right_tts_emo_weight: Optional[float] = Field(default=None, ge=0.1, le=1.2, description="右说话人情感权重 (双人模式)")
     
     # HeyGem 配置
     heygem_steps: int = Field(default=16, ge=4, le=32, description="推理步数")

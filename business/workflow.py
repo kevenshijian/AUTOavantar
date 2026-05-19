@@ -591,6 +591,10 @@ class DigitalHumanWorkflow:
                 if self.tts_engine and hasattr(self.tts_engine, 'set_progress_callback'):
                     self.tts_engine.set_progress_callback(None)
 
+                # 记录双人模式配置参数
+                if config.enable_double_mode:
+                    logger.info(f"双人模式音频合成配置: left_tts_speed={config.left_tts_speed}, right_tts_speed={config.right_tts_speed}, left_tts_emo_weight={config.left_tts_emo_weight}, right_tts_emo_weight={config.right_tts_emo_weight}")
+
                 audio_results = self.audio_processor.synthesize_all(
                     task, config,
                     cancel_callback=cancel_callback,
