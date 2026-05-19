@@ -300,7 +300,7 @@ class AudioProcessor:
             音频结果
         """
         # 确定情感权重（从配置中获取，或使用传入值）
-        emotion_weight = emo_weight or getattr(segment, 'emotion_weight', 0.4)
+        emotion_weight = emo_weight if emo_weight is not None else getattr(segment, 'emotion_weight', 0.4)
         # API 支持 0.0~1.6 的强度范围
         emotion_weight = min(max(emotion_weight, 0.0), 1.6)
 
@@ -527,14 +527,14 @@ class AudioProcessor:
                         segment_emo_weight = config.tts_emo_weight
                         if config.enable_double_mode:
                             if segment.speaker == "left":
-                                if config.left_tts_speed:
+                                if config.left_tts_speed is not None:
                                     segment_speed = config.left_tts_speed
-                                if config.left_tts_emo_weight:
+                                if config.left_tts_emo_weight is not None:
                                     segment_emo_weight = config.left_tts_emo_weight
                             elif segment.speaker == "right":
-                                if config.right_tts_speed:
+                                if config.right_tts_speed is not None:
                                     segment_speed = config.right_tts_speed
-                                if config.right_tts_emo_weight:
+                                if config.right_tts_emo_weight is not None:
                                     segment_emo_weight = config.right_tts_emo_weight
 
                         result = self.synthesize_segment(

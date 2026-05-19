@@ -52,6 +52,10 @@
           <div class="header-right">
             <!-- 动态导航按钮 -->
             <template v-if="currentRoute === 'Dashboard'">
+              <el-button type="success" plain @click="$router.push('/smart-cut')">
+                <el-icon><Scissors /></el-icon>
+                智能裁剪
+              </el-button>
               <el-button type="primary" plain @click="$router.push('/materials')">
                 <el-icon><Collection /></el-icon>
                 素材库
@@ -61,19 +65,38 @@
                 设置
               </el-button>
             </template>
-            
+
             <template v-else-if="currentRoute === 'Materials'">
               <el-button type="primary" plain @click="$router.push('/')">
                 <el-icon><HomeFilled /></el-icon>
                 主页
+              </el-button>
+              <el-button type="success" plain @click="$router.push('/smart-cut')">
+                <el-icon><Scissors /></el-icon>
+                智能裁剪
               </el-button>
               <el-button type="info" plain @click="$router.push('/settings')">
                 <el-icon><Setting /></el-icon>
                 设置
               </el-button>
             </template>
-            
+
             <template v-else-if="currentRoute === 'Settings'">
+              <el-button type="primary" plain @click="$router.push('/')">
+                <el-icon><HomeFilled /></el-icon>
+                主页
+              </el-button>
+              <el-button type="success" plain @click="$router.push('/smart-cut')">
+                <el-icon><Scissors /></el-icon>
+                智能裁剪
+              </el-button>
+              <el-button type="info" plain @click="$router.push('/materials')">
+                <el-icon><Collection /></el-icon>
+                素材库
+              </el-button>
+            </template>
+
+            <template v-else-if="currentRoute === 'SmartCut'">
               <el-button type="primary" plain @click="$router.push('/')">
                 <el-icon><HomeFilled /></el-icon>
                 主页
@@ -82,13 +105,21 @@
                 <el-icon><Collection /></el-icon>
                 素材库
               </el-button>
+              <el-button type="info" plain @click="$router.push('/settings')">
+                <el-icon><Setting /></el-icon>
+                设置
+              </el-button>
             </template>
-            
+
             <template v-else>
               <!-- 其他页面显示主页和素材库 -->
               <el-button type="primary" plain @click="$router.push('/')">
                 <el-icon><HomeFilled /></el-icon>
                 主页
+              </el-button>
+              <el-button type="success" plain @click="$router.push('/smart-cut')">
+                <el-icon><Scissors /></el-icon>
+                智能裁剪
               </el-button>
               <el-button type="info" plain @click="$router.push('/materials')">
                 <el-icon><Collection /></el-icon>
@@ -158,7 +189,7 @@ import { wsManager } from '@/utils/websocket'
 import websocketService from '@/services/websocket'
 import { settingsApi } from '@/services/api'
 import { ElMessage } from 'element-plus'
-import { Collection, Setting, HomeFilled, Bell, Sunny, Moon, Loading } from '@element-plus/icons-vue'
+import { Collection, Setting, HomeFilled, Bell, Sunny, Moon, Loading, Scissors } from '@element-plus/icons-vue'
 import CUDAWarningDialog from '@/components/CUDAWarningDialog.vue'
 import UpdateDialog from '@/components/UpdateDialog.vue'
 

@@ -253,6 +253,32 @@ export const licenseApi = {
   consumeQuota: () => request.post('/api/license/quota/consume')
 }
 
+// 智能裁剪相关 API
+export const smartCutApi = {
+  // 上传视频
+  upload: (formData) => request.post('/api/smart-cut/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }),
+
+  // 创建裁剪任务
+  createTask: (data) => request.post('/api/smart-cut/tasks', data),
+
+  // 获取任务状态
+  getTask: (taskId) => request.get(`/api/smart-cut/tasks/${taskId}`),
+
+  // 获取片段列表
+  getSegments: (taskId) => request.get(`/api/smart-cut/tasks/${taskId}/segments`),
+
+  // 提取音频
+  extractAudio: (data) => request.post('/api/smart-cut/extract-audio', data),
+
+  // 合成视频
+  merge: (data) => request.post('/api/smart-cut/merge', data),
+
+  // 删除任务
+  deleteTask: (taskId) => request.delete(`/api/smart-cut/tasks/${taskId}`)
+}
+
 // 导出便捷方法
 export const login = (username, password) => authApi.login(username, password)
 export const register = (username, email, password) => authApi.register(username, email, password)
@@ -266,5 +292,6 @@ export default {
   tag: tagApi,
   services: servicesApi,
   system: systemApi,
-  license: licenseApi
+  license: licenseApi,
+  smartCut: smartCutApi
 }

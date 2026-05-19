@@ -9,6 +9,12 @@ const routes = [
     meta: { title: '首页' }
   },
   {
+    path: '/smart-cut',
+    name: 'SmartCut',
+    component: () => import('@/views/SmartCutView.vue'),
+    meta: { title: '智能裁剪' }
+  },
+  {
     path: '/tasks',
     name: 'Tasks',
     component: () => import('@/views/TaskListView.vue'),

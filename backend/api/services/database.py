@@ -186,6 +186,31 @@ class DatabaseService:
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_task ON task_history(task_id)")
 
+        # 智能裁剪任务表
+        await cursor.execute("""
+            CREATE TABLE IF NOT EXISTS smart_cut_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id VARCHAR(64) UNIQUE NOT NULL,
+                video_path VARCHAR(512) NOT NULL,
+                video_name VARCHAR(256),
+                video_duration FLOAT,
+                video_fps FLOAT,
+                video_width INTEGER,
+                video_height INTEGER,
+                total_frames INTEGER,
+                status VARCHAR(32) DEFAULT 'pending',
+                progress INTEGER DEFAULT 0,
+                current_stage VARCHAR(64),
+                config TEXT,
+                segments_info TEXT,
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_smart_cut_task_id ON smart_cut_tasks(task_id)")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_smart_cut_status ON smart_cut_tasks(status)")
+
         await self._init_tag_tables(conn)
 
         await conn.commit()
@@ -775,6 +800,167 @@ class DatabaseService:
 
             rows = await cursor.fetchall()
             return [dict(row) for row in rows], total
+
+    # ==================== 智能裁剪任务相关方法 ====================
+
+    async def smart_cut_task_create(
+        self,
+        task_id: str,
+        video_path: str,
+        video_name: str = "",
+        video_duration: float = 0.0,
+        video_fps: float = 0.0,
+        video_width: int = 0,
+        video_height: int = 0,
+        total_frames: int = 0,
+        config: Optional[Dict[str, Any]] = None
+    ) -> int:
+        """创建智能裁剪任务"""
+        async with self.get_connection() as conn:
+            cursor = await conn.cursor()
+            now = datetime.now().isoformat()
+
+            await cursor.execute("""
+                INSERT INTO smart_cut_tasks (
+                    task_id, video_path, video_name, video_duration, video_fps,
+                    video_width, video_height, total_frames, status, progress,
+                    current_stage, config, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, '', ?, ?, ?)
+            """, (
+                task_id, video_path, video_name, video_duration, video_fps,
+                video_width, video_height, total_frames,
+                json.dumps(config) if config else None, now, now
+            ))
+
+            await conn.commit()
+            logger.info(f"智能裁剪任务创建成功: {task_id}")
+            return cursor.lastrowid
+
+    async def smart_cut_task_get_by_id(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """根据task_id获取智能裁剪任务"""
+        async with self.get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT * FROM smart_cut_tasks WHERE task_id = ?",
+                (task_id,)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def smart_cut_task_update(
+        self,
+        task_id: str,
+        status: Optional[str] = None,
+        progress: Optional[int] = None,
+        current_stage: Optional[str] = None,
+        segments_info: Optional[List[Dict]] = None,
+        error_message: Optional[str] = None
+    ) -> bool:
+        """更新智能裁剪任务"""
+        async with self.get_connection() as conn:
+            cursor = await conn.cursor()
+            now = datetime.now().isoformat()
+
+            updates = []
+            values = []
+
+            if status is not None:
+                updates.append("status = ?")
+                values.append(status)
+            if progress is not None:
+                updates.append("progress = ?")
+                values.append(progress)
+            if current_stage is not None:
+                updates.append("current_stage = ?")
+                values.append(current_stage)
+            if segments_info is not None:
+                updates.append("segments_info = ?")
+                values.append(json.dumps(segments_info, ensure_ascii=False))
+            if error_message is not None:
+                updates.append("error_message = ?")
+                values.append(error_message)
+
+            if not updates:
+                return False
+
+            updates.append("updated_at = ?")
+            values.append(now)
+            values.append(task_id)
+
+            await cursor.execute(
+                f"UPDATE smart_cut_tasks SET {', '.join(updates)} WHERE task_id = ?",
+                values
+            )
+            await conn.commit()
+
+            if cursor.rowcount > 0:
+                logger.info(f"智能裁剪任务更新成功: {task_id}")
+                return True
+            return False
+
+    async def smart_cut_task_delete(self, task_id: str) -> bool:
+        """删除智能裁剪任务"""
+        async with self.get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "DELETE FROM smart_cut_tasks WHERE task_id = ?",
+                (task_id,)
+            )
+            await conn.commit()
+
+            if cursor.rowcount > 0:
+                logger.info(f"智能裁剪任务删除成功: {task_id}")
+                return True
+            return False
+
+    async def smart_cut_task_list(
+        self,
+        status: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """获取智能裁剪任务列表"""
+        async with self.get_connection() as conn:
+            cursor = await conn.cursor()
+
+            # 获取总数
+            if status:
+                await cursor.execute(
+                    "SELECT COUNT(*) FROM smart_cut_tasks WHERE status = ?",
+                    (status,)
+                )
+            else:
+                await cursor.execute("SELECT COUNT(*) FROM smart_cut_tasks")
+            total = (await cursor.fetchone())[0]
+
+            # 获取分页数据
+            if status:
+                await cursor.execute(
+                    """SELECT * FROM smart_cut_tasks WHERE status = ?
+                       ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+                    (status, limit, offset)
+                )
+            else:
+                await cursor.execute(
+                    """SELECT * FROM smart_cut_tasks
+                       ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+                    (limit, offset)
+                )
+
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows], total
+
+    async def smart_cut_task_get_processing(self) -> List[Dict[str, Any]]:
+        """获取进行中的智能裁剪任务"""
+        async with self.get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """SELECT * FROM smart_cut_tasks
+                   WHERE status IN ('pending', 'processing')
+                   ORDER BY created_at ASC"""
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
 
 
 # 全局数据库服务实例

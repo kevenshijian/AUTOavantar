@@ -448,7 +448,7 @@ class TTSEngine:
 
             if emotion and emotion in self._emotion_mapping:
                 base_vector = self._emotion_mapping[emotion]
-                # 应用强度缩放
+                # 不使用强度缩放，直接使用设定值
                 emo_vector = base_vector
                 # 从映射中获取语速参数（如果存在）
                 speed_key = f"{emotion}_speed"

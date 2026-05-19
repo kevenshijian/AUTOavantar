@@ -6,6 +6,7 @@
 
 import subprocess
 import os
+import platform
 from pathlib import Path
 
 
@@ -62,13 +63,16 @@ def extract_audio_from_video(video_path: str, output_path: str = None, sample_ra
 
     try:
         # 执行 ffmpeg 命令
+        # 在 Windows 上添加 CREATE_NO_WINDOW 标志，防止弹出控制台窗口
+        creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             check=True,
             encoding='utf-8',
-            errors='replace'
+            errors='replace',
+            creationflags=creationflags
         )
         return output_path
     except subprocess.CalledProcessError as e:

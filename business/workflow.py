@@ -504,8 +504,8 @@ class DigitalHumanWorkflow:
             if speed_processor:
                 if config.enable_double_mode:
                     # 双人模式：调节左右说话人的参考音频
-                    left_speed = config.left_tts_speed or config.tts_speed
-                    right_speed = config.right_tts_speed or config.tts_speed
+                    left_speed = config.left_tts_speed if config.left_tts_speed is not None else config.tts_speed
+                    right_speed = config.right_tts_speed if config.right_tts_speed is not None else config.tts_speed
                     
                     # 调节左说话人参考音频
                     if left_speed != 1.0:
