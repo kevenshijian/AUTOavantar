@@ -466,6 +466,9 @@ class SmartCutService:
                 sys.path.insert(0, str(models_path))
                 from smart_segmenter import SmartVideoSegmenter
 
+            # 获取事件循环引用（用于在线程中调度回调）
+            loop = asyncio.get_running_loop()
+
             # 创建分割器实例
             async def update_progress(progress: int, stage: str, processed: int, total: int):
                 if progress_callback:
@@ -483,6 +486,19 @@ class SmartCutService:
                     "timestamp": datetime.now().isoformat()
                 })
 
+            # 同步包装器，用于在 executor 中调用 async 回调
+            def sync_progress_callback(progress: int, stage: str, processed: int, total: int):
+                """同步进度回调，将 async 回调调度到主事件循环"""
+                try:
+                    # 使用 run_coroutine_threadsafe 从线程中调度 async 函数
+                    future = asyncio.run_coroutine_threadsafe(
+                        update_progress(progress, stage, processed, total),
+                        loop
+                    )
+                    # 不等待结果，避免阻塞
+                except Exception as e:
+                    logger.warning(f"进度回调调度失败: {e}")
+
             # 初始化分割器
             await update_progress(5, "加载识别模型", 0, total_frames)
 
@@ -491,17 +507,22 @@ class SmartCutService:
                 use_motion=config.get("enable_motion", False),
                 use_brightness=config.get("enable_brightness", False),
                 use_pose=config.get("enable_pose", False),
-                min_segment_frames=min_segment_frames
+                progress_callback=sync_progress_callback  # 传入同步回调
             )
 
             await update_progress(10, "开始智能识别", 0, total_frames)
 
             # 执行分割（在线程池中运行以避免阻塞）
-            loop = asyncio.get_event_loop()
             segments = await loop.run_in_executor(
                 None,
                 lambda: segmenter.segment_video(str(full_video_path))
             )
+
+            # 过滤短片段（小于最小片段帧数）
+            if min_segment_frames > 0:
+                original_count = len(segments)
+                segments = [s for s in segments if (s[1] - s[0]) >= min_segment_frames]
+                logger.info(f"片段过滤：{original_count} -> {len(segments)}（最小帧数：{min_segment_frames}）")
 
             await update_progress(80, "生成片段文件", total_frames, total_frames)
 

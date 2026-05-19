@@ -690,6 +690,8 @@ class WorkflowService:
                 tts_emo_weight=config.get("tts_emo_weight", getattr(task, 'tts_emo_weight', 0.8)),
                 left_tts_speed=config.get("left_tts_speed", getattr(task, 'left_tts_speed', None)),
                 right_tts_speed=config.get("right_tts_speed", getattr(task, 'right_tts_speed', None)),
+                left_tts_emo_weight=config.get("left_tts_emo_weight", getattr(task, 'left_tts_emo_weight', None)),
+                right_tts_emo_weight=config.get("right_tts_emo_weight", getattr(task, 'right_tts_emo_weight', None)),
                 heygem_steps=config.get("heygem_steps", getattr(task, 'heygem_steps', 16)),
                 inference_batch_size=config.get("inference_batch_size", getattr(task.config, 'inference_batch_size', 8) if task.config else 8),
                 enable_subtitle=config.get("enable_subtitle", getattr(task, 'enable_subtitle', True)),
