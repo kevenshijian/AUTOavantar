@@ -154,7 +154,7 @@ const getVecValues = (row) => {
 }
 
 const getVecLabel = (index) => {
-  const labels = ['高兴', '生气', '悲伤', '悲伤', '厌恶', '忧郁', '惊讶', '平静']
+  const labels = ['高兴', '生气', '悲伤', '恐惧', '厌恶', '忧郁', '惊讶', '平静']
   return labels[index - 1] || `v${index}`
 }
 

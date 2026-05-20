@@ -431,3 +431,264 @@ async def delete_task(task_id: str):
             code=500,
             message=f"删除失败：{str(e)}"
         )
+
+
+@router.post("/save-to-material", response_model=ApiResponse)
+async def save_to_material(request: dict):
+    """
+    保存片段到素材库
+
+    将选中的片段视频复制到 data 目录，并创建素材库记录
+    """
+    service = get_smart_cut_service()
+
+    try:
+        # 解析请求数据
+        segments = request.get("segments", [])
+        material_type = request.get("type", "character")  # character 或 scene
+
+        if not segments:
+            return ApiResponse(
+                code=400,
+                message="请至少选择一个片段"
+            )
+
+        # 验证片段路径
+        for segment in segments:
+            segment_path = segment.get("video_path", "")
+            if not segment_path:
+                continue
+
+            # 检查片段文件是否存在
+            full_path = service.base_dir / segment_path
+            if not full_path.exists():
+                return ApiResponse(
+                    code=400,
+                    message=f"片段文件不存在: {segment_path}"
+                )
+
+        # 根据类型创建素材
+        if material_type == "character":
+            result = await _save_as_character(segments, service)
+        elif material_type == "scene":
+            result = await _save_as_scene(segments, service)
+        else:
+            return ApiResponse(
+                code=400,
+                message=f"不支持的素材类型: {material_type}"
+            )
+
+        return ApiResponse(
+            code=200,
+            message="保存成功",
+            data=result
+        )
+
+    except Exception as e:
+        logger.error(f"保存到素材库失败: {e}")
+        return ApiResponse(
+            code=500,
+            message=f"保存失败：{str(e)}"
+        )
+
+
+async def _save_as_character(segments: list, service) -> dict:
+    """保存为角色素材"""
+    import json
+    import uuid
+
+    # 生成角色ID和名称
+    role_id = f"r{len(json.loads(service._get_mock_roles())) + 1:03d}"
+    role_name = f"角色_{len(json.loads(service._get_mock_roles())) + 1}"
+
+    # 选择开场视频（第一个片段）
+    opening_video = None
+    loop_videos = []
+    ending_video = None
+
+    for i, segment in enumerate(segments):
+        video_path = segment.get("video_path", "")
+        if not video_path:
+            continue
+
+        full_path = service.base_dir / video_path
+        if full_path.exists():
+            if opening_video is None:
+                opening_video = str(full_path.relative_to(service.base_dir))
+            else:
+                loop_videos.append({"path": str(full_path.relative_to(service.base_dir))})
+
+    # 生成缩略图
+    thumbnail_path = service._generate_role_thumbnail(opening_video or "", loop_videos, ending_video, role_id)
+
+    # 保存到模拟数据
+    mock_data_path = Path(__file__).parent.parent.parent / "data" / "mock_roles.json"
+    mock_data_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(mock_data_path, 'r', encoding='utf-8') as f:
+        mock_roles = json.load(f)
+
+    new_role = {
+        "role_id": role_id,
+        "role_name": role_name,
+        "role_type": "human",
+        "scenes": [],
+        "opening_video": opening_video or "",
+        "loop_videos": loop_videos,
+        "ending_video": ending_video or "",
+        "audio_id": "",
+        "description": "",
+        "video_count": len(segments),
+        "is_double_mode": False,
+        "left_audio_id": None,
+        "right_audio_id": None,
+        "thumbnail": thumbnail_path
+    }
+
+    mock_roles.append(new_role)
+
+    with open(mock_data_path, 'w', encoding='utf-8') as f:
+        json.dump(mock_roles, f, ensure_ascii=False, indent=2)
+
+    return {
+        "role_id": role_id,
+        "role_name": role_name,
+        "video_count": len(segments),
+        "thumbnail": thumbnail_path
+    }
+
+
+async def _save_as_scene(segments: list, service) -> dict:
+    """保存为场景素材"""
+    import json
+
+    # 生成场景ID和名称
+    scene_id = f"s{len(json.loads(service._get_mock_scenes())) + 1:03d}"
+    scene_name = f"场景_{len(json.loads(service._get_mock_scenes())) + 1}"
+
+    # 收集所有视频路径
+    scene_videos = []
+    for segment in segments:
+        video_path = segment.get("video_path", "")
+        if video_path:
+            full_path = service.base_dir / video_path
+            if full_path.exists():
+                scene_videos.append({"path": str(full_path.relative_to(service.base_dir))})
+
+    # 生成缩略图
+    thumbnail_path = service._generate_scene_thumbnail(scene_videos, scene_id)
+
+    # 保存到模拟数据
+    mock_data_path = Path(__file__).parent.parent.parent / "data" / "mock_scenes.json"
+    mock_data_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(mock_data_path, 'r', encoding='utf-8') as f:
+        mock_scenes = json.load(f)
+
+    new_scene = {
+        "scene_id": scene_id,
+        "scene_name": scene_name,
+        "scene_type": "场景",
+        "scene_videos": scene_videos,
+        "description": "",
+        "video_count": len(scene_videos),
+        "thumbnail": thumbnail_path
+    }
+
+    mock_scenes.append(new_scene)
+
+    with open(mock_data_path, 'w', encoding='utf-8') as f:
+        json.dump(mock_scenes, f, ensure_ascii=False, indent=2)
+
+    return {
+        "scene_id": scene_id,
+        "scene_name": scene_name,
+        "video_count": len(scene_videos),
+        "thumbnail": thumbnail_path
+    }
+
+
+def _get_mock_roles(self) -> str:
+    """获取模拟角色数据"""
+    mock_data_path = Path(__file__).parent.parent.parent / "data" / "mock_roles.json"
+    if mock_data_path.exists():
+        with open(mock_data_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    return "[]"
+
+
+def _get_mock_scenes(self) -> str:
+    """获取模拟场景数据"""
+    mock_data_path = Path(__file__).parent.parent.parent / "data" / "mock_scenes.json"
+    if mock_data_path.exists():
+        with open(mock_data_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    return "[]"
+
+
+def _generate_role_thumbnail(self, opening_video: str, loop_videos: list, ending_video: str, role_id: str) -> str:
+    """生成角色缩略图"""
+    import base64
+    import cv2
+
+    # 选择视频
+    video_path = None
+    if opening_video:
+        video_path = opening_video
+    else:
+        all_videos = [{"path": v["path"]} for v in loop_videos]
+        if ending_video:
+            all_videos.append({"path": ending_video})
+        if all_videos:
+            video_path = all_videos[0]["path"]
+
+    if not video_path:
+        return ""
+
+    # 提取第一帧
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return ""
+
+    ret, frame = cap.read()
+    cap.release()
+
+    if not ret or frame is None:
+        return ""
+
+    # 编码为base64
+    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    frame_base64 = base64.b64encode(buffer).decode('utf-8')
+
+    # 返回相对路径
+    return f"data/thumbnails/roles/{role_id}.jpg"
+
+
+def _generate_scene_thumbnail(self, scene_videos: list, scene_id: str) -> str:
+    """生成场景缩略图"""
+    import base64
+    import cv2
+
+    if not scene_videos:
+        return ""
+
+    # 选择第一个视频
+    video_path = scene_videos[0]["path"]
+
+    # 提取第一帧
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return ""
+
+    ret, frame = cap.read()
+    cap.release()
+
+    if not ret or frame is None:
+        return ""
+
+    # 编码为base64
+    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    frame_base64 = base64.b64encode(buffer).decode('utf-8')
+
+    # 返回相对路径
+    return f"data/thumbnails/scenes/{scene_id}.jpg"

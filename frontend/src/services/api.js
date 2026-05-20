@@ -279,7 +279,10 @@ export const smartCutApi = {
   deleteTask: (taskId) => request.delete(`/api/smart-cut/tasks/${taskId}`),
 
   // 获取历史记录列表
-  getHistory: () => request.get('/api/smart-cut/history')
+  getHistory: () => request.get('/api/smart-cut/history'),
+
+  // 保存到素材库
+  saveToMaterial: (data) => request.post('/api/smart-cut/save-to-material', data)
 }
 
 // 导出便捷方法

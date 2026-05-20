@@ -182,6 +182,14 @@
               <el-icon><Scissor /></el-icon>
               开始裁剪
             </el-button>
+            <el-button
+              size="large"
+              :loading="extractingOriginalAudio"
+              @click="extractOriginalAudio"
+            >
+              <el-icon><Headset /></el-icon>
+              提取音频
+            </el-button>
           </el-form-item>
         </el-form>
       </el-card>
@@ -245,6 +253,15 @@
               {{ seg.reason_label }}
             </el-tag>
             <el-button
+              class="segment-delete-btn"
+              type="danger"
+              size="small"
+              circle
+              @click.stop="deleteSegment(seg.segment_id)"
+            >
+              <el-icon><Delete /></el-icon>
+            </el-button>
+            <el-button
               class="segment-select-btn"
               :type="selectedSegments.includes(seg.segment_id) ? 'primary' : 'default'"
               size="small"
@@ -277,14 +294,20 @@
       :title="previewSegmentInfo?.reason_label || '片段预览'"
       width="600px"
       destroy-on-close
+      @opened="onPreviewOpened"
+      @closed="onPreviewClosed"
     >
       <div class="preview-dialog-content">
-        <video
-          v-if="previewSegmentInfo"
-          :src="`/files/${previewSegmentInfo.video_path}`"
-          controls
-          class="preview-video"
-        ></video>
+        <div class="preview-video-container">
+          <video
+            ref="previewVideoPlayer"
+            v-if="previewSegmentInfo"
+            :src="`/files/${previewSegmentInfo.video_path}`"
+            controls
+            autoplay
+            class="preview-video"
+          ></video>
+        </div>
         <div v-if="previewSegmentInfo" class="preview-info">
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="时长">{{ formatDuration(previewSegmentInfo.duration) }}</el-descriptions-item>
@@ -343,7 +366,7 @@
     <el-dialog
       v-model="mergeDialogVisible"
       title="合成视频配置"
-      width="500px"
+      width="600px"
       destroy-on-close
     >
       <el-form :model="mergeConfig" label-width="100px">
@@ -364,11 +387,39 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item label="转场效果">
-          <el-select v-model="mergeConfig.transition" placeholder="请选择转场效果">
-            <el-option value="none" label="无转场" />
-            <el-option value="fade" label="淡入淡出" />
-            <el-option value="wipe" label="擦除" />
-          </el-select>
+          <div class="transition-settings">
+            <!-- 转场分类 -->
+            <div class="transition-row">
+              <el-select v-model="mergeConfig.transitionType" placeholder="选择分类" @change="handleTransitionTypeChange">
+                <el-option v-for="category in transitionCategories" :key="category" :label="category" :value="category" />
+              </el-select>
+              <el-select v-model="mergeConfig.transition" placeholder="选择效果" :disabled="mergeConfig.transitionRandom" class="effect-select">
+                <el-option v-for="effect in currentTransitionEffects" :key="effect.value" :label="effect.name" :value="effect.value" />
+              </el-select>
+            </div>
+            <!-- 随机效果 -->
+            <div class="transition-random">
+              <el-checkbox v-model="mergeConfig.transitionRandom" @change="handleTransitionRandomChange">
+                启用随机效果
+              </el-checkbox>
+              <el-checkbox v-if="mergeConfig.transitionRandom" v-model="mergeConfig.transitionRandomAll">
+                每次转场都随机
+              </el-checkbox>
+            </div>
+            <!-- 转场时长 -->
+            <div class="transition-duration">
+              <span class="duration-label">转场时长：</span>
+              <el-slider
+                v-model="mergeConfig.transitionDuration"
+                :min="0.5"
+                :max="5.0"
+                :step="0.1"
+                show-input
+                style="width: 200px;"
+              />
+              <span>秒</span>
+            </div>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -376,6 +427,38 @@
         <el-button type="primary" :loading="merging" @click="mergeVideos">
           开始合成
         </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 音频播放弹窗 -->
+    <el-dialog
+      v-model="audioDialogVisible"
+      title="音频播放"
+      width="500px"
+      destroy-on-close
+      @closed="onAudioDialogClosed"
+    >
+      <div class="audio-dialog-content">
+        <div class="audio-player-container">
+          <audio
+            ref="audioPlayer"
+            v-if="audioInfo"
+            :src="`/files/${audioInfo.audio_path}`"
+            controls
+            class="audio-player"
+          ></audio>
+        </div>
+        <div v-if="audioInfo" class="audio-info">
+          <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="来源片段">{{ audioInfo.source_segment }}</el-descriptions-item>
+            <el-descriptions-item label="时长">{{ formatDuration(audioInfo.duration) }}</el-descriptions-item>
+          </el-descriptions>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="audioDialogVisible = false">关闭</el-button>
+        <el-button type="primary" @click="addToReference">添加参考</el-button>
+        <el-button type="success" @click="addToBGM">添加BGM</el-button>
       </template>
     </el-dialog>
   </div>
@@ -398,7 +481,8 @@ import {
   FolderAdd,
   Clock,
   Document,
-  Back
+  Back,
+  Headset
 } from '@element-plus/icons-vue'
 import { smartCutApi } from '@/services/api'
 
@@ -459,6 +543,7 @@ const pendingSegments = ref([])
 // 预览弹窗
 const previewDialogVisible = ref(false)
 const previewSegmentInfo = ref(null)
+const previewVideoPlayer = ref(null)
 
 // 合成弹窗
 const mergeDialogVisible = ref(false)
@@ -467,8 +552,89 @@ const mergeConfig = reactive({
   output_name: '',
   resolution: '1080p',
   fps: 30,
-  transition: 'none'
+  transition: 'none',
+  transitionType: '淡入淡出',
+  transitionRandom: false,
+  transitionRandomAll: false,
+  transitionDuration: 1.0
 })
+
+// 转场效果分类
+const transitionCategories = ref(['淡入淡出', '滑动擦除', '图形变换', '特效切片'])
+
+// 转场效果映射表（分类 → 效果列表）
+const transitionEffectsMap = {
+  '淡入淡出': [
+    { name: '无转场', value: 'none' },
+    { name: '交叉淡入淡出', value: 'fade' },
+    { name: '渐隐至黑', value: 'fadeblack' },
+    { name: '渐隐至白', value: 'fadewhite' },
+    { name: '溶解', value: 'dissolve' },
+    { name: '距离过渡', value: 'distance' }
+  ],
+  '滑动擦除': [
+    { name: '向左滑动', value: 'slideleft' },
+    { name: '向右滑动', value: 'slideright' },
+    { name: '向上滑动', value: 'slideup' },
+    { name: '向下滑动', value: 'slidedown' },
+    { name: '向左擦除', value: 'wipeleft' },
+    { name: '向右擦除', value: 'wiperight' },
+    { name: '向上擦除', value: 'wipeup' },
+    { name: '向下擦除', value: 'wipedown' },
+    { name: '平滑左滑', value: 'smoothleft' },
+    { name: '平滑右滑', value: 'smoothright' },
+    { name: '平滑上滑', value: 'smoothup' },
+    { name: '平滑下滑', value: 'smoothdown' }
+  ],
+  '图形变换': [
+    { name: '圆形裁剪', value: 'circlecrop' },
+    { name: '矩形裁剪', value: 'rectcrop' },
+    { name: '圆形展开', value: 'circleopen' },
+    { name: '圆形闭合', value: 'circleclose' },
+    { name: '水平展开', value: 'horzopen' },
+    { name: '水平闭合', value: 'horzclose' },
+    { name: '垂直展开', value: 'vertopen' },
+    { name: '垂直闭合', value: 'vertclose' },
+    { name: '放大过渡', value: 'zoomin' },
+    { name: '水平挤压', value: 'squeezeh' },
+    { name: '垂直挤压', value: 'squeezev' }
+  ],
+  '特效切片': [
+    { name: '像素化', value: 'pixelize' },
+    { name: '径向过渡', value: 'radial' },
+    { name: '高斯模糊', value: 'hblur' },
+    { name: '水平左切片', value: 'hlslice' },
+    { name: '水平右切片', value: 'hrslice' },
+    { name: '垂直上切片', value: 'vuslice' },
+    { name: '垂直下切片', value: 'vdslice' }
+  ]
+}
+
+// 当前分类下的转场效果列表
+const currentTransitionEffects = computed(() => {
+  return transitionEffectsMap[mergeConfig.transitionType] || []
+})
+
+// 处理转场分类切换
+const handleTransitionTypeChange = (category) => {
+  const effects = transitionEffectsMap[category]
+  if (effects && effects.length > 0) {
+    mergeConfig.transition = effects[0].value
+  }
+}
+
+// 处理随机效果切换
+const handleTransitionRandomChange = (random) => {
+  if (random) {
+    mergeConfig.transitionRandomAll = false
+  }
+}
+
+// 音频播放弹窗
+const audioDialogVisible = ref(false)
+const audioInfo = ref(null)
+const audioPlayer = ref(null)
+const extractingOriginalAudio = ref(false)
 
 // 计算属性
 const progressStatus = computed(() => {
@@ -694,6 +860,23 @@ const previewSegment = (seg) => {
   previewDialogVisible.value = true
 }
 
+const onPreviewOpened = () => {
+  // 弹窗打开后自动播放视频
+  if (previewVideoPlayer.value) {
+    previewVideoPlayer.value.play().catch(() => {
+      // 自动播放可能被浏览器阻止，忽略错误
+    })
+  }
+}
+
+const onPreviewClosed = () => {
+  // 弹窗关闭时停止播放
+  if (previewVideoPlayer.value) {
+    previewVideoPlayer.value.pause()
+    previewVideoPlayer.value.currentTime = 0
+  }
+}
+
 const toggleSegmentSelect = (segmentId) => {
   const index = selectedSegments.value.indexOf(segmentId)
   if (index > -1) {
@@ -705,6 +888,21 @@ const toggleSegmentSelect = (segmentId) => {
 
 const clearSelection = () => {
   selectedSegments.value = []
+}
+
+const deleteSegment = (segmentId) => {
+  const index = segments.value.findIndex(s => s.segment_id === segmentId)
+  if (index > -1) {
+    segments.value.splice(index, 1)
+    // 如果该片段在待处理列表中，也一并移除
+    removeFromPending(segmentId)
+    // 如果该片段在选中列表中，也一并移除
+    const selectedIndex = selectedSegments.value.indexOf(segmentId)
+    if (selectedIndex > -1) {
+      selectedSegments.value.splice(selectedIndex, 1)
+    }
+    ElMessage.success('片段已删除')
+  }
 }
 
 const addToPending = (seg) => {
@@ -756,13 +954,115 @@ const extractAudio = async (seg) => {
 
     if (response.code === 200) {
       ElMessage.success('音频提取成功')
-      // TODO: 跳转到素材库创建页面
+      // 关闭预览弹窗
+      previewDialogVisible.value = false
+      // 显示音频播放弹窗
+      audioInfo.value = {
+        audio_path: response.data.audio_path,
+        duration: response.data.duration,
+        source_segment: seg.segment_id
+      }
+      audioDialogVisible.value = true
     } else {
       throw new Error(response.message || '提取音频失败')
     }
   } catch (error) {
     console.error('提取音频失败:', error)
     ElMessage.error(error.message || '提取音频失败')
+  }
+}
+
+// 添加到参考音频库
+const addToReference = async () => {
+  if (!audioInfo.value) return
+
+  try {
+    // 调用素材库 API 添加到参考音频
+    const response = await smartCutApi.saveToMaterial({
+      segments: [{
+        video_path: audioInfo.value.audio_path,
+        segment_id: audioInfo.value.source_segment
+      }],
+      type: 'reference_audio'
+    })
+
+    if (response.code === 200) {
+      ElMessage.success('已添加到参考音频库')
+      audioDialogVisible.value = false
+    } else {
+      throw new Error(response.message || '添加失败')
+    }
+  } catch (error) {
+    console.error('添加到参考音频失败:', error)
+    ElMessage.error(error.message || '添加失败')
+  }
+}
+
+// 添加到 BGM 库
+const addToBGM = async () => {
+  if (!audioInfo.value) return
+
+  try {
+    // 调用素材库 API 添加到 BGM
+    const response = await smartCutApi.saveToMaterial({
+      segments: [{
+        video_path: audioInfo.value.audio_path,
+        segment_id: audioInfo.value.source_segment
+      }],
+      type: 'bgm'
+    })
+
+    if (response.code === 200) {
+      ElMessage.success('已添加到 BGM 库')
+      audioDialogVisible.value = false
+    } else {
+      throw new Error(response.message || '添加失败')
+    }
+  } catch (error) {
+    console.error('添加到 BGM 失败:', error)
+    ElMessage.error(error.message || '添加失败')
+  }
+}
+
+// 音频弹窗关闭时停止播放
+const onAudioDialogClosed = () => {
+  if (audioPlayer.value) {
+    audioPlayer.value.pause()
+    audioPlayer.value.currentTime = 0
+  }
+}
+
+// 提取原视频音频
+const extractOriginalAudio = async () => {
+  if (!videoInfo.value || !videoInfo.value.video_path) {
+    ElMessage.warning('请先上传视频')
+    return
+  }
+
+  extractingOriginalAudio.value = true
+  try {
+    const response = await smartCutApi.extractAudio({
+      segment_path: videoInfo.value.video_path,
+      name: `${videoInfo.value.video_name}_audio`
+    })
+
+    if (response.code === 200) {
+      ElMessage.success('音频提取成功')
+      // 显示音频播放弹窗
+      audioInfo.value = {
+        audio_path: response.data.audio_path,
+        duration: response.data.duration,
+        source_segment: videoInfo.value.video_name
+      }
+      audioDialogVisible.value = true
+    } else {
+      throw new Error(response.message || '提取音频失败')
+    }
+  } catch (error) {
+    console.error('提取音频失败:', error)
+    ElMessage.error(error.message || '提取音频失败')
+  } finally {
+    extractingOriginalAudio.value = false
   }
 }
 
@@ -789,7 +1089,10 @@ const mergeVideos = async () => {
       output_name: mergeConfig.output_name,
       resolution: mergeConfig.resolution,
       fps: mergeConfig.fps,
-      transition: mergeConfig.transition
+      transition: mergeConfig.transition,
+      transitionRandom: mergeConfig.transitionRandom,
+      transitionRandomAll: mergeConfig.transitionRandomAll,
+      transitionDuration: mergeConfig.transitionDuration
     })
 
     if (response.code === 200) {
@@ -808,7 +1111,7 @@ const mergeVideos = async () => {
   }
 }
 
-const saveToMaterial = () => {
+const saveToMaterial = async () => {
   if (pendingSegments.value.length === 0) {
     ElMessage.warning('请先添加片段到待处理列表')
     return
@@ -824,39 +1127,55 @@ const saveToMaterial = () => {
       distinguishCancelAndClose: true,
       type: 'info'
     }
-  ).then(() => {
+  ).then(async () => {
     // 选择"角色"
-    const videos = pendingSegments.value.map(s => ({
-      path: s.video_path,
-      name: s.segment_id,
-      duration: s.duration
-    }))
-    router.push({
-      path: '/materials',
-      query: {
-        action: 'create',
-        type: 'character',
-        videos: JSON.stringify(videos)
+    try {
+      const response = await smartCutApi.saveToMaterial({
+        segments: pendingSegments.value.map(s => ({
+          video_path: s.video_path,
+          segment_id: s.segment_id,
+          duration: s.duration,
+          thumbnail: s.thumbnail
+        })),
+        type: 'character'
+      })
+
+      if (response.code === 200) {
+        ElMessage.success(`已保存为角色素材：${response.data.role_name}`)
+        // 清空待处理列表
+        clearPending()
+      } else {
+        throw new Error(response.message || '保存失败')
       }
-    })
-    ElMessage.success('已跳转到角色创建页面')
-  }).catch((action) => {
+    } catch (error) {
+      console.error('保存到角色素材库失败:', error)
+      ElMessage.error(error.message || '保存失败')
+    }
+  }).catch(async (action) => {
     if (action === 'cancel') {
       // 选择"场景"
-      const videos = pendingSegments.value.map(s => ({
-        path: s.video_path,
-        name: s.segment_id,
-        duration: s.duration
-      }))
-      router.push({
-        path: '/materials',
-        query: {
-          action: 'create',
-          type: 'scene',
-          videos: JSON.stringify(videos)
+      try {
+        const response = await smartCutApi.saveToMaterial({
+          segments: pendingSegments.value.map(s => ({
+            video_path: s.video_path,
+            segment_id: s.segment_id,
+            duration: s.duration,
+            thumbnail: s.thumbnail
+          })),
+          type: 'scene'
+        })
+
+        if (response.code === 200) {
+          ElMessage.success(`已保存为场景素材：${response.data.scene_name}`)
+          // 清空待处理列表
+          clearPending()
+        } else {
+          throw new Error(response.message || '保存失败')
         }
-      })
-      ElMessage.success('已跳转到场景创建页面')
+      } catch (error) {
+        console.error('保存到场景素材库失败:', error)
+        ElMessage.error(error.message || '保存失败')
+      }
     }
     // 如果是 close（点击关闭按钮），不做任何操作
   })
@@ -887,11 +1206,16 @@ const restoreHistory = async (item) => {
       segments.value = res.data.segments
       videoInfo.value = {
         video_name: item.video_name,
+        video_path: item.video_path,
         duration: item.video_duration,
         fps: item.video_fps,
         width: item.video_width,
         height: item.video_height,
         total_frames: item.total_frames
+      }
+      // 设置视频 URL 以便播放原视频
+      if (item.video_path) {
+        videoUrl.value = `/files/${item.video_path}`
       }
       ElMessage.success('已恢复历史记录')
     }
@@ -1149,6 +1473,12 @@ onUnmounted(() => {
   right: 8px;
 }
 
+.segment-delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 40px;
+}
+
 .segment-selected {
   border-color: #409eff;
   border-width: 2px;
@@ -1173,9 +1503,22 @@ onUnmounted(() => {
   gap: 16px;
 }
 
-.preview-video {
-  width: 100%;
+.preview-video-container {
+  height: 400px;
+  background: #000;
   border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.preview-video {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
 }
 
 .preview-info {
@@ -1244,6 +1587,59 @@ onUnmounted(() => {
   margin-top: 16px;
   display: flex;
   gap: 12px;
+}
+
+/* 音频弹窗 */
+.audio-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.audio-player-container {
+  padding: 20px;
+  background: #f5f7fa;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.audio-player {
+  width: 100%;
+}
+
+/* 转场效果设置 */
+.transition-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.transition-row {
+  display: flex;
+  gap: 12px;
+}
+
+.transition-row .effect-select {
+  flex: 1;
+}
+
+.transition-random {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.transition-duration {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.duration-label {
+  color: #606266;
+  font-size: 14px;
 }
 
 /* 历史记录区域 */

@@ -374,6 +374,7 @@ class SmartCutService:
             segments_info = json.loads(task.get("segments_info") or "[]")
             history_list.append({
                 "task_id": task["task_id"],
+                "video_path": task.get("video_path", ""),
                 "video_name": task["video_name"] or "未命名视频",
                 "video_duration": task["video_duration"] or 0,
                 "video_fps": task["video_fps"] or 0,
@@ -389,7 +390,7 @@ class SmartCutService:
 
     async def delete_task(self, task_id: str) -> bool:
         """
-        删除任务及临时文件
+        删除任务及所有相关文件
 
         Args:
             task_id: 任务ID
@@ -405,7 +406,12 @@ class SmartCutService:
         if not task:
             return False
 
-        # 删除临时目录
+        # 删除数据库记录
+        deleted = await db.smart_cut_task_delete(task_id)
+        if not deleted:
+            return False
+
+        # 删除原视频临时目录
         video_path = task.get("video_path", "")
         if video_path:
             # 从 video_path 提取 video_id
@@ -418,8 +424,27 @@ class SmartCutService:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     logger.info(f"已删除临时目录: {temp_dir}")
 
-        # 删除数据库记录
-        return await db.smart_cut_task_delete(task_id)
+        # 删除片段视频和缩略图
+        try:
+            segments_info = json.loads(task.get("segments_info") or "[]")
+            for segment in segments_info:
+                segment_path = segment.get("video_path", "")
+                thumbnail_path = segment.get("thumbnail", "")
+
+                # 删除片段视频
+                if segment_path and Path(segment_path).exists():
+                    Path(segment_path).unlink()
+                    logger.info(f"已删除片段视频: {segment_path}")
+
+                # 删除缩略图
+                if thumbnail_path and Path(thumbnail_path).exists():
+                    Path(thumbnail_path).unlink()
+                    logger.info(f"已删除缩略图: {thumbnail_path}")
+        except Exception as e:
+            logger.error(f"删除片段文件时出错: {e}")
+
+        logger.info(f"任务 {task_id} 及其所有文件已删除")
+        return True
 
     def cleanup_temp_files(self, max_age_hours: int = 24):
         """

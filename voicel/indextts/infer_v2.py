@@ -1068,10 +1068,6 @@ class QwenEmotion:
             "悲伤": "sad",
             "恐惧": "afraid",
             "反感": "disgusted",
-            # TODO: the "低落" (melancholic) emotion will always be mapped to
-            # "悲伤" (sad) by QwenEmotion's text analysis. it doesn't know the
-            # difference between those emotions even if user writes exact words.
-            # SEE: `self.melancholic_words` for current workaround.
             "低落": "melancholic",
             "惊讶": "surprised",
             "自然": "calm",
