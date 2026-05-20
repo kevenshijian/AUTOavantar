@@ -1111,19 +1111,18 @@ const saveToMaterial = () => {
     return
   }
 
-  // 使用 ElMessageBox.prompt 让用户选择保存类型
-  ElMessageBox.prompt('请选择保存类型：输入 "角色" 保存为角色素材，输入 "场景" 保存为场景素材', '保存到素材库', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    inputPlaceholder: '请输入：角色 或 场景',
-    inputValue: '角色',
-    inputValidator: (value) => {
-      if (!value) return '请输入保存类型'
-      if (value !== '角色' && value !== '场景') return '请输入 "角色" 或 "场景"'
-      return true
+  // 使用 ElMessageBox 弹出选择框
+  ElMessageBox.confirm(
+    '请选择保存类型',
+    '保存到素材库',
+    {
+      confirmButtonText: '角色',
+      cancelButtonText: '场景',
+      distinguishCancelAndClose: true,
+      type: 'info'
     }
-  }).then(({ value }) => {
-    const materialType = value === '角色' ? 'character' : 'scene'
+  ).then(() => {
+    // 选择"角色" - 导航到素材库页面
     const videosData = encodeURIComponent(JSON.stringify(
       pendingSegments.value.map(s => ({
         path: s.video_path,
@@ -1137,12 +1136,32 @@ const saveToMaterial = () => {
       path: '/materials',
       query: {
         action: 'create',
-        type: materialType,
+        type: 'character',
         videos: videosData
       }
     })
-  }).catch(() => {
-    // 用户点击取消，不做任何操作
+  }).catch((action) => {
+    if (action === 'cancel') {
+      // 选择"场景" - 导航到素材库页面
+      const videosData = encodeURIComponent(JSON.stringify(
+        pendingSegments.value.map(s => ({
+          path: s.video_path,
+          name: s.segment_id,
+          duration: s.duration,
+          thumbnail: s.thumbnail
+        }))
+      ))
+
+      router.push({
+        path: '/materials',
+        query: {
+          action: 'create',
+          type: 'scene',
+          videos: videosData
+        }
+      })
+    }
+    // 如果是 close（点击关闭按钮），不做任何操作
   })
 }
 
