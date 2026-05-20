@@ -172,14 +172,13 @@
             />
           </el-form-item>
 
-          <el-form-item>
+          <el-form-item class="action-buttons-row">
             <el-button
               type="primary"
               size="large"
               :loading="processing"
               @click="startCutting"
             >
-              <el-icon><Scissor /></el-icon>
               开始裁剪
             </el-button>
             <el-button
@@ -187,7 +186,6 @@
               :loading="extractingOriginalAudio"
               @click="extractOriginalAudio"
             >
-              <el-icon><Headset /></el-icon>
               提取音频
             </el-button>
           </el-form-item>
@@ -390,10 +388,10 @@
           <div class="transition-settings">
             <!-- 转场分类 -->
             <div class="transition-row">
-              <el-select v-model="mergeConfig.transitionType" placeholder="选择分类" @change="handleTransitionTypeChange">
+              <el-select v-model="mergeConfig.transitionType" placeholder="选择分类" @change="handleTransitionTypeChange" class="transition-select">
                 <el-option v-for="category in transitionCategories" :key="category" :label="category" :value="category" />
               </el-select>
-              <el-select v-model="mergeConfig.transition" placeholder="选择效果" :disabled="mergeConfig.transitionRandom" class="effect-select">
+              <el-select v-model="mergeConfig.transition" placeholder="选择效果" :disabled="mergeConfig.transitionRandom" class="transition-select">
                 <el-option v-for="effect in currentTransitionEffects" :key="effect.value" :label="effect.name" :value="effect.value" />
               </el-select>
             </div>
@@ -972,56 +970,52 @@ const extractAudio = async (seg) => {
   }
 }
 
-// 添加到参考音频库
-const addToReference = async () => {
+// 添加到参考音频库 - 导航到素材库页面并预填充音频
+const addToReference = () => {
   if (!audioInfo.value) return
 
-  try {
-    // 调用素材库 API 添加到参考音频
-    const response = await smartCutApi.saveToMaterial({
-      segments: [{
-        video_path: audioInfo.value.audio_path,
-        segment_id: audioInfo.value.source_segment
-      }],
-      type: 'reference_audio'
-    })
+  // 关闭音频弹窗
+  audioDialogVisible.value = false
 
-    if (response.code === 200) {
-      ElMessage.success('已添加到参考音频库')
-      audioDialogVisible.value = false
-    } else {
-      throw new Error(response.message || '添加失败')
+  // 导航到素材库页面，传递音频信息作为查询参数
+  const audioData = encodeURIComponent(JSON.stringify({
+    path: audioInfo.value.audio_path,
+    duration: audioInfo.value.duration,
+    source: audioInfo.value.source_segment
+  }))
+
+  router.push({
+    path: '/materials',
+    query: {
+      action: 'create',
+      type: 'audio',
+      audio: audioData
     }
-  } catch (error) {
-    console.error('添加到参考音频失败:', error)
-    ElMessage.error(error.message || '添加失败')
-  }
+  })
 }
 
-// 添加到 BGM 库
-const addToBGM = async () => {
+// 添加到 BGM 库 - 导航到素材库页面并预填充音频
+const addToBGM = () => {
   if (!audioInfo.value) return
 
-  try {
-    // 调用素材库 API 添加到 BGM
-    const response = await smartCutApi.saveToMaterial({
-      segments: [{
-        video_path: audioInfo.value.audio_path,
-        segment_id: audioInfo.value.source_segment
-      }],
-      type: 'bgm'
-    })
+  // 关闭音频弹窗
+  audioDialogVisible.value = false
 
-    if (response.code === 200) {
-      ElMessage.success('已添加到 BGM 库')
-      audioDialogVisible.value = false
-    } else {
-      throw new Error(response.message || '添加失败')
+  // 导航到素材库页面，传递音频信息作为查询参数
+  const audioData = encodeURIComponent(JSON.stringify({
+    path: audioInfo.value.audio_path,
+    duration: audioInfo.value.duration,
+    source: audioInfo.value.source_segment
+  }))
+
+  router.push({
+    path: '/materials',
+    query: {
+      action: 'create',
+      type: 'bgm',
+      audio: audioData
     }
-  } catch (error) {
-    console.error('添加到 BGM 失败:', error)
-    ElMessage.error(error.message || '添加失败')
-  }
+  })
 }
 
 // 音频弹窗关闭时停止播放
@@ -1111,73 +1105,44 @@ const mergeVideos = async () => {
   }
 }
 
-const saveToMaterial = async () => {
+const saveToMaterial = () => {
   if (pendingSegments.value.length === 0) {
     ElMessage.warning('请先添加片段到待处理列表')
     return
   }
 
-  // 使用 ElMessageBox 弹出选择框
-  ElMessageBox.confirm(
-    '请选择保存类型',
-    '保存到素材库',
-    {
-      confirmButtonText: '角色',
-      cancelButtonText: '场景',
-      distinguishCancelAndClose: true,
-      type: 'info'
+  // 使用 ElMessageBox.prompt 让用户选择保存类型
+  ElMessageBox.prompt('请选择保存类型：输入 "角色" 保存为角色素材，输入 "场景" 保存为场景素材', '保存到素材库', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    inputPlaceholder: '请输入：角色 或 场景',
+    inputValue: '角色',
+    inputValidator: (value) => {
+      if (!value) return '请输入保存类型'
+      if (value !== '角色' && value !== '场景') return '请输入 "角色" 或 "场景"'
+      return true
     }
-  ).then(async () => {
-    // 选择"角色"
-    try {
-      const response = await smartCutApi.saveToMaterial({
-        segments: pendingSegments.value.map(s => ({
-          video_path: s.video_path,
-          segment_id: s.segment_id,
-          duration: s.duration,
-          thumbnail: s.thumbnail
-        })),
-        type: 'character'
-      })
+  }).then(({ value }) => {
+    const materialType = value === '角色' ? 'character' : 'scene'
+    const videosData = encodeURIComponent(JSON.stringify(
+      pendingSegments.value.map(s => ({
+        path: s.video_path,
+        name: s.segment_id,
+        duration: s.duration,
+        thumbnail: s.thumbnail
+      }))
+    ))
 
-      if (response.code === 200) {
-        ElMessage.success(`已保存为角色素材：${response.data.role_name}`)
-        // 清空待处理列表
-        clearPending()
-      } else {
-        throw new Error(response.message || '保存失败')
+    router.push({
+      path: '/materials',
+      query: {
+        action: 'create',
+        type: materialType,
+        videos: videosData
       }
-    } catch (error) {
-      console.error('保存到角色素材库失败:', error)
-      ElMessage.error(error.message || '保存失败')
-    }
-  }).catch(async (action) => {
-    if (action === 'cancel') {
-      // 选择"场景"
-      try {
-        const response = await smartCutApi.saveToMaterial({
-          segments: pendingSegments.value.map(s => ({
-            video_path: s.video_path,
-            segment_id: s.segment_id,
-            duration: s.duration,
-            thumbnail: s.thumbnail
-          })),
-          type: 'scene'
-        })
-
-        if (response.code === 200) {
-          ElMessage.success(`已保存为场景素材：${response.data.scene_name}`)
-          // 清空待处理列表
-          clearPending()
-        } else {
-          throw new Error(response.message || '保存失败')
-        }
-      } catch (error) {
-        console.error('保存到场景素材库失败:', error)
-        ElMessage.error(error.message || '保存失败')
-      }
-    }
-    // 如果是 close（点击关闭按钮），不做任何操作
+    })
+  }).catch(() => {
+    // 用户点击取消，不做任何操作
   })
 }
 
@@ -1589,6 +1554,25 @@ onUnmounted(() => {
   gap: 12px;
 }
 
+/* 操作按钮强制并排 */
+.action-buttons-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
+.action-buttons-row :deep(.el-form-item__content) {
+  display: flex;
+  gap: 12px;
+  flex-wrap: nowrap;
+  width: 100%;
+}
+
+.action-buttons-row :deep(.el-button) {
+  flex: 1;
+  min-width: 0;
+}
+
 /* 音频弹窗 */
 .audio-dialog-content {
   display: flex;
@@ -1621,8 +1605,10 @@ onUnmounted(() => {
   gap: 12px;
 }
 
-.transition-row .effect-select {
+.transition-select {
   flex: 1;
+  width: 50%;
+  min-width: 0;
 }
 
 .transition-random {
