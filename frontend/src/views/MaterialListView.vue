@@ -1491,9 +1491,11 @@ const handleTabChange = () => {
 }
 
 const openCreateDialog = () => {
+  console.log('[MaterialListView] openCreateDialog called')
   isEditing.value = false
   resetForm()
   showCreateDialog.value = true
+  console.log('[MaterialListView] showCreateDialog set to true:', showCreateDialog.value)
 }
 
 const editItem = (item) => {
@@ -1934,40 +1936,108 @@ onMounted(() => {
   handleSmartCutParams()
 })
 
+// 监听路由查询参数变化，处理从智能裁剪页面导航过来的情况
+watch(
+  () => route.query.action,
+  (newAction, oldAction) => {
+    console.log('[MaterialListView] watch triggered, newAction:', newAction, 'oldAction:', oldAction)
+    // 当 action 参数存在且发生变化时重新处理
+    if (newAction && newAction !== oldAction) {
+      handleSmartCutParams()
+    }
+  }
+)
+
 // 处理从智能裁剪传递的参数
 const handleSmartCutParams = () => {
-  const { action, type, videos } = route.query
+  const { action, type, videos, audio } = route.query
 
-  if (action === 'create' && videos) {
-    try {
-      const videoList = JSON.parse(videos)
-      if (videoList && videoList.length > 0) {
-        // 切换到对应的 tab
-        if (type === 'character') {
-          currentTab.value = 'role'
-        } else if (type === 'scene') {
-          currentTab.value = 'scene'
+  console.log('[MaterialListView] handleSmartCutParams called:', { action, type, videos, audio })
+
+  if (action === 'create') {
+    // 处理视频参数（角色/场景）
+    if (videos) {
+      try {
+        const videoList = JSON.parse(videos)
+        if (videoList && videoList.length > 0) {
+          // 切换到对应的 tab
+          if (type === 'character') {
+            currentTab.value = 'role'
+          } else if (type === 'scene') {
+            currentTab.value = 'scene'
+          }
+
+          // 打开创建对话框
+          console.log('[MaterialListView] Opening create dialog for videos, type:', type)
+          openCreateDialog()
+          console.log('[MaterialListView] showCreateDialog after openCreateDialog:', showCreateDialog.value)
+
+          // 填充视频数据
+          if (type === 'character') {
+            // 角色创建：将第一个视频作为开场视频，其余作为循环视频
+            createForm.opening_video = videoList[0].path
+            if (videoList.length > 1) {
+              createForm.loop_videos = videoList.slice(1).map(v => ({
+                path: v.path,
+                emotion: 'calm'
+              }))
+            }
+            ElMessage.success(`已添加 ${videoList.length} 个视频到角色素材`)
+          } else if (type === 'scene') {
+            // 场景创建：将视频添加到 scene_videos
+            createForm.scene_videos = videoList.map(v => ({
+              path: v.path,
+              tag: ''
+            }))
+            ElMessage.success(`已添加 ${videoList.length} 个视频到场景素材`)
+          }
         }
-
-        // 打开创建对话框
-        openCreateDialog()
-
-        // 填充视频数据
-        if (type === 'character') {
-          // 角色创建：将视频添加到 loop_videos
-          createForm.loop_videos = videoList.map(v => v.path)
-          ElMessage.success(`已添加 ${videoList.length} 个视频到角色素材`)
-        } else if (type === 'scene') {
-          // 场景创建：将视频添加到 scene_videos
-          createForm.scene_videos = videoList.map(v => ({
-            path: v.path,
-            name: v.name || ''
-          }))
-          ElMessage.success(`已添加 ${videoList.length} 个视频到场景素材`)
-        }
+      } catch (e) {
+        console.error('解析智能裁剪参数失败:', e)
       }
-    } catch (e) {
-      console.error('解析智能裁剪参数失败:', e)
+    }
+
+    // 处理音频参数（参考音频/BGM）
+    if (audio) {
+      try {
+        const audioData = JSON.parse(audio)
+        if (audioData && audioData.path) {
+          // 切换到对应的 tab
+          if (type === 'audio') {
+            currentTab.value = 'audio'
+          } else if (type === 'bgm') {
+            currentTab.value = 'bgm'
+          }
+
+          // 打开创建对话框
+          console.log('[MaterialListView] Opening create dialog for audio, type:', type)
+          openCreateDialog()
+          console.log('[MaterialListView] showCreateDialog after openCreateDialog:', showCreateDialog.value)
+
+          // 填充音频数据
+          if (type === 'audio') {
+            // 参考音频：添加到 audio_clips
+            createForm.audio_clips = [{
+              name: audioData.source || '提取的音频',
+              path: audioData.path,
+              duration: audioData.duration || 0,
+              status: 'completed',
+              loading: false,
+              error: false,
+              denoise: false
+            }]
+            ElMessage.success('已添加音频到参考音频库，请填写名称后保存')
+          } else if (type === 'bgm') {
+            // BGM：设置 bgm_path
+            createForm.bgm_path = audioData.path
+            createForm.bgm_name = audioData.source || '提取的音频'
+            createForm.bgm_duration = audioData.duration || 0
+            ElMessage.success('已添加音频到 BGM 库，请填写名称后保存')
+          }
+        }
+      } catch (e) {
+        console.error('解析音频参数失败:', e)
+      }
     }
   }
 }

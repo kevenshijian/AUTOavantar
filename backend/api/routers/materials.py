@@ -11,6 +11,7 @@ import os
 import sys
 import json
 import uuid
+import shutil
 from pathlib import Path
 
 # 首先定义logger
@@ -709,47 +710,75 @@ async def create_material(
             actual_is_double_mode = is_double_mode
             actual_left_audio_id = left_audio_id
             actual_right_audio_id = right_audio_id
-            
+
             if hasattr(is_double_mode, 'default'):
                 actual_is_double_mode = is_double_mode.default
             if hasattr(left_audio_id, 'default'):
                 actual_left_audio_id = left_audio_id.default
             if hasattr(right_audio_id, 'default'):
                 actual_right_audio_id = right_audio_id.default
-            
+
             if actual_is_double_mode:
                 if not actual_left_audio_id or not actual_right_audio_id:
                     raise HTTPException(status_code=400, detail="双人模式必须选择两个参考音频")
-                
+
                 left_audio_exists = any(a.get("id") == actual_left_audio_id for a in MOCK_AUDIOS)
                 right_audio_exists = any(a.get("id") == actual_right_audio_id for a in MOCK_AUDIOS)
                 if not left_audio_exists:
                     raise HTTPException(status_code=400, detail=f"左边参考音频不存在: {actual_left_audio_id}")
                 if not right_audio_exists:
                     raise HTTPException(status_code=400, detail=f"右边参考音频不存在: {actual_right_audio_id}")
-            
+
             loop_videos_list = []
             if loop_videos:
                 try:
                     loop_videos_list = json.loads(loop_videos)
                 except Exception as e:
                     logger.warning(f"解析循环视频列表失败: {e}")
-            
+
+            # 将视频文件复制到 backend/data/roles/ 目录
+            role_dir = BASE_DIR / "backend" / "data" / "roles"
+            role_dir.mkdir(parents=True, exist_ok=True)
+
+            def copy_video_to_role_dir(video_path_str: str) -> str:
+                """将视频文件复制到 backend/data/roles/ 目录，返回相对路径"""
+                if not video_path_str:
+                    return ""
+                resolved = resolve_video_path(video_path_str)
+                if not resolved or not resolved.exists():
+                    logger.warning(f"角色视频源文件不存在: {video_path_str}")
+                    return video_path_str
+                dest_filename = f"role_{uuid.uuid4().hex[:8]}{resolved.suffix}"
+                dest_path = role_dir / dest_filename
+                shutil.copy2(str(resolved), str(dest_path))
+                logger.info(f"角色视频已复制到: {dest_path}")
+                return f"backend/data/roles/{dest_filename}"
+
+            # 复制开场视频
+            saved_opening_video = copy_video_to_role_dir(opening_video) if opening_video else ""
+            # 复制循环视频
+            saved_loop_videos = []
+            for lv in loop_videos_list:
+                saved_path = copy_video_to_role_dir(lv.get("path", ""))
+                saved_loop_videos.append({**lv, "path": saved_path})
+            # 复制结尾视频
+            saved_ending_video = copy_video_to_role_dir(ending_video) if ending_video else ""
+
             video_count = 0
-            if opening_video:
+            if saved_opening_video:
                 video_count += 1
-            video_count += len(loop_videos_list)
-            if ending_video:
+            video_count += len(saved_loop_videos)
+            if saved_ending_video:
                 video_count += 1
-            
+
             new_role = {
                 "role_id": f"r{len(MOCK_ROLES) + 1:03d}",
                 "role_name": name,
                 "role_type": role_type or "human",
                 "scenes": scenes or [],
-                "opening_video": opening_video or "",
-                "loop_videos": loop_videos_list,
-                "ending_video": ending_video or "",
+                "opening_video": saved_opening_video,
+                "loop_videos": saved_loop_videos,
+                "ending_video": saved_ending_video,
                 "audio_id": audio_id or "",
                 "description": "",
                 "video_count": video_count,
@@ -757,15 +786,15 @@ async def create_material(
                 "left_audio_id": actual_left_audio_id if actual_is_double_mode else None,
                 "right_audio_id": actual_right_audio_id if actual_is_double_mode else None
             }
-            
+
             thumbnail_path = generate_role_thumbnail(
-                opening_video=opening_video or "",
-                loop_videos=loop_videos_list,
-                ending_video=ending_video or "",
+                opening_video=saved_opening_video,
+                loop_videos=saved_loop_videos,
+                ending_video=saved_ending_video,
                 role_id=new_role["role_id"]
             )
             new_role["thumbnail"] = thumbnail_path
-            
+
             MOCK_ROLES.append(new_role)
             save_mock_roles()
             logger.info(f"创建角色素材: {new_role['role_id']}, 双人模式: {actual_is_double_mode}")
@@ -779,22 +808,43 @@ async def create_material(
                     scene_videos_list = json.loads(scene_videos)
                 except Exception as e:
                     logger.warning(f"解析场景视频列表失败: {e}")
-            
+
+            # 将视频文件复制到 backend/data/scenes/ 目录
+            scene_dir = BASE_DIR / "backend" / "data" / "scenes"
+            scene_dir.mkdir(parents=True, exist_ok=True)
+
+            saved_scene_videos = []
+            for sv in scene_videos_list:
+                video_path_str = sv.get("path", "")
+                if not video_path_str:
+                    saved_scene_videos.append(sv)
+                    continue
+                resolved = resolve_video_path(video_path_str)
+                if not resolved or not resolved.exists():
+                    logger.warning(f"场景视频源文件不存在: {video_path_str}")
+                    saved_scene_videos.append(sv)
+                    continue
+                dest_filename = f"scene_{uuid.uuid4().hex[:8]}{resolved.suffix}"
+                dest_path = scene_dir / dest_filename
+                shutil.copy2(str(resolved), str(dest_path))
+                logger.info(f"场景视频已复制到: {dest_path}")
+                saved_scene_videos.append({**sv, "path": f"backend/data/scenes/{dest_filename}"})
+
             new_scene = {
                 "scene_id": f"s{len(MOCK_SCENES) + 1:03d}",
                 "scene_name": name,
                 "scene_type": "场景",
-                "scene_videos": scene_videos_list,
+                "scene_videos": saved_scene_videos,
                 "description": "",
-                "video_count": len(scene_videos_list)
+                "video_count": len(saved_scene_videos)
             }
-            
+
             thumbnail_path = generate_scene_thumbnail(
-                scene_videos=scene_videos_list,
+                scene_videos=saved_scene_videos,
                 scene_id=new_scene["scene_id"]
             )
             new_scene["thumbnail"] = thumbnail_path
-            
+
             MOCK_SCENES.append(new_scene)
             save_mock_scenes()
             logger.info(f"创建场景素材: {new_scene['scene_id']}")
@@ -803,29 +853,38 @@ async def create_material(
         elif type == "bgm":
             # 使用bgm_path参数
             final_bgm_path = bgm_path or audio_path
-            
+
             if not final_bgm_path:
                 raise HTTPException(status_code=400, detail="请提供BGM文件路径")
-            
+
+            # 将BGM文件复制到 backend/data/BGM/ 目录
+            bgm_dir = BASE_DIR / "backend" / "data" / "BGM"
+            bgm_dir.mkdir(parents=True, exist_ok=True)
+
+            source_path = resolve_video_path(final_bgm_path)
+            if source_path and source_path.exists():
+                bgm_filename = f"bgm_{uuid.uuid4().hex[:8]}{source_path.suffix}"
+                bgm_dest = bgm_dir / bgm_filename
+                shutil.copy2(str(source_path), str(bgm_dest))
+                # 保存相对路径
+                final_bgm_path = f"backend/data/BGM/{bgm_filename}"
+                logger.info(f"BGM文件已复制到: {bgm_dest}")
+            else:
+                logger.warning(f"BGM源文件不存在: {final_bgm_path}，将保存原始路径")
+
             # 计算BGM时长
             bgm_duration = duration
             try:
                 from pydub import AudioSegment
-                import os
-                
-                # 构建正确的文件路径
-                audio_path_obj = Path(final_bgm_path)
-                if not audio_path_obj.is_absolute():
-                    backend_root = Path(__file__).resolve().parent.parent
-                    audio_path_obj = backend_root / final_bgm_path
-                
-                if audio_path_obj.exists():
-                    audio = AudioSegment.from_file(str(audio_path_obj))
-                    bgm_duration = len(audio) / 1000.0  # 转换为秒
+
+                resolved_bgm = resolve_video_path(final_bgm_path)
+                if resolved_bgm and resolved_bgm.exists():
+                    audio = AudioSegment.from_file(str(resolved_bgm))
+                    bgm_duration = len(audio) / 1000.0
                     logger.info(f"BGM时长: {bgm_duration:.2f}秒")
             except Exception as e:
                 logger.warning(f"无法计算BGM时长: {e}")
-            
+
             new_bgm = {
                 "bgm_id": f"b{len(MOCK_BGMS) + 1:03d}",
                 "bgm_name": name,

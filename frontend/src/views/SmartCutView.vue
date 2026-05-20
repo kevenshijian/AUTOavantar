@@ -5,8 +5,8 @@
       <p class="description">上传视频，智能识别分割点，快速提取精彩片段</p>
     </el-card>
 
-    <!-- 历史记录区域 -->
-    <el-card v-if="!videoInfo && !processing" class="history-section" v-loading="loadingHistory">
+    <!-- 历史记录区域 - 始终显示在顶部 -->
+    <el-card class="history-section" v-loading="loadingHistory">
       <template #header>
         <div class="card-header">
           <span><el-icon><Clock /></el-icon> 历史记录</span>
@@ -978,11 +978,11 @@ const addToReference = () => {
   audioDialogVisible.value = false
 
   // 导航到素材库页面，传递音频信息作为查询参数
-  const audioData = encodeURIComponent(JSON.stringify({
+  const audioData = JSON.stringify({
     path: audioInfo.value.audio_path,
     duration: audioInfo.value.duration,
     source: audioInfo.value.source_segment
-  }))
+  })
 
   router.push({
     path: '/materials',
@@ -1002,11 +1002,11 @@ const addToBGM = () => {
   audioDialogVisible.value = false
 
   // 导航到素材库页面，传递音频信息作为查询参数
-  const audioData = encodeURIComponent(JSON.stringify({
+  const audioData = JSON.stringify({
     path: audioInfo.value.audio_path,
     duration: audioInfo.value.duration,
     source: audioInfo.value.source_segment
-  }))
+  })
 
   router.push({
     path: '/materials',
@@ -1123,14 +1123,14 @@ const saveToMaterial = () => {
     }
   ).then(() => {
     // 选择"角色" - 导航到素材库页面
-    const videosData = encodeURIComponent(JSON.stringify(
+    const videosData = JSON.stringify(
       pendingSegments.value.map(s => ({
         path: s.video_path,
         name: s.segment_id,
         duration: s.duration,
         thumbnail: s.thumbnail
       }))
-    ))
+    )
 
     router.push({
       path: '/materials',
@@ -1143,14 +1143,14 @@ const saveToMaterial = () => {
   }).catch((action) => {
     if (action === 'cancel') {
       // 选择"场景" - 导航到素材库页面
-      const videosData = encodeURIComponent(JSON.stringify(
+      const videosData = JSON.stringify(
         pendingSegments.value.map(s => ({
           path: s.video_path,
           name: s.segment_id,
           duration: s.duration,
           thumbnail: s.thumbnail
         }))
-      ))
+      )
 
       router.push({
         path: '/materials',
@@ -1647,9 +1647,10 @@ onUnmounted(() => {
   font-size: 14px;
 }
 
-/* 历史记录区域 */
+/* 历史记录区域 - 始终置顶显示 */
 .history-section {
   margin-top: 20px;
+  margin-bottom: 20px;
 }
 
 .history-section .card-header {
@@ -1672,6 +1673,8 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 16px;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
 .history-card {
