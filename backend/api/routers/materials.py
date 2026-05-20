@@ -41,23 +41,25 @@ router = APIRouter()
 def extract_video_frame(video_path: Optional[str], frame_index: int = 0) -> Optional[str]:
     """
     从视频中提取指定帧
-    
+
     Args:
         video_path: 视频文件路径
         frame_index: 帧索引，默认为第一帧
-        
+
     Returns:
         base64 编码的图像数据，失败返回 None
     """
     import cv2
     import base64
-    
-    if not video_path or not os.path.exists(video_path):
+
+    # 解析视频路径（支持相对路径）
+    resolved_path = resolve_video_path(video_path)
+    if not resolved_path:
         return None
-    
+
     cap = None
     try:
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(str(resolved_path))
         
         if not cap.isOpened():
             logger.warning(f"无法打开视频文件: {video_path}")
@@ -91,10 +93,44 @@ def extract_video_frame(video_path: Optional[str], frame_index: int = 0) -> Opti
 import random
 import base64
 
-THUMBNAIL_DIR = Path(__file__).parent.parent.parent / "data" / "thumbnails"
+# 使用已定义的 project_root 作为项目根目录（AUTOavantar）
+BASE_DIR = project_root
+THUMBNAIL_DIR = BASE_DIR / "data" / "thumbnails"
 THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
 (THUMBNAIL_DIR / "roles").mkdir(exist_ok=True)
 (THUMBNAIL_DIR / "scenes").mkdir(exist_ok=True)
+
+
+def resolve_video_path(video_path: Optional[str]) -> Optional[Path]:
+    """
+    将视频路径转换为绝对路径
+
+    Args:
+        video_path: 可能是相对路径或绝对路径
+
+    Returns:
+        绝对路径 Path 对象，如果路径无效返回 None
+    """
+    if not video_path:
+        return None
+
+    path = Path(video_path)
+
+    # 如果已经是绝对路径且存在，直接返回
+    if path.is_absolute() and path.exists():
+        return path
+
+    # 尝试相对于 BASE_DIR 解析
+    abs_path = BASE_DIR / video_path
+    if abs_path.exists():
+        return abs_path
+
+    # 尝试原始路径（可能路径本身就是正确的）
+    if path.exists():
+        return path
+
+    logger.warning(f"无法找到视频文件: {video_path}")
+    return None
 
 
 def generate_role_thumbnail(
