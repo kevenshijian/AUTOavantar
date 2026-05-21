@@ -15,9 +15,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
-import subprocess
-
-from api.utils.async_subprocess import async_run_subprocess, async_run_ffprobe, async_run_ffmpeg
+from api.utils.async_subprocess import async_run_subprocess, async_run_ffmpeg
 
 from config.settings import settings
 from business.preprocess.video_preprocessor import VideoPreprocessor
@@ -663,7 +661,7 @@ async def extract_audio(request: ExtractAudioRequest):
             "-ar", "16000", "-ac", "1",
             "-y", audio_path
         ]
-        await async_run_ffmpeg(cmd, timeout=120)
+        await async_run_ffmpeg(cmd, timeout=120, check=True)
 
         duration = 0.0
         probe_cmd = [
@@ -1109,11 +1107,11 @@ async def open_output_dir():
 
     try:
         if platform.system() == "Windows":
-            await async_run_subprocess(["explorer", output_dir_absolute])
+            asyncio.create_task(async_run_subprocess(["explorer", output_dir_absolute]))
         elif platform.system() == "Darwin":  # macOS
-            await async_run_subprocess(["open", output_dir_absolute])
+            asyncio.create_task(async_run_subprocess(["open", output_dir_absolute]))
         else:  # Linux
-            await async_run_subprocess(["xdg-open", output_dir_absolute])
+            asyncio.create_task(async_run_subprocess(["xdg-open", output_dir_absolute]))
 
         logger.info(f"打开输出目录: {output_dir_absolute}")
         return {

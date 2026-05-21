@@ -15,9 +15,9 @@
     </div>
 
     <div class="list-section">
-      <TaskList 
+      <TaskList
         :tasks="tasks"
-        :isLoading="isLoading"
+        :isLoading="isFetchingList"
         @delete="handleDelete"
       />
     </div>
@@ -36,7 +36,7 @@ import TaskList from '@/components/TaskList.vue'
 import TaskCreate from '@/components/TaskCreate.vue'
 
 const taskStore = useTaskStore()
-const { tasks, isLoading, error } = storeToRefs(taskStore)
+const { tasks, isFetchingList, error } = storeToRefs(taskStore)
 
 const showCreateForm = ref(false)
 

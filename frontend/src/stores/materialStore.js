@@ -10,13 +10,14 @@ export const useMaterialStore = defineStore('material', {
       bgm: []
     },
     isLoadingMaterials: false,
+    isFetchingDetail: false,
     isUploading: false,
     isDeleting: false,
     error: null
   }),
 
   getters: {
-    isLoading: (state) => state.isLoadingMaterials || state.isUploading || state.isDeleting,
+    isLoading: (state) => state.isLoadingMaterials || state.isFetchingDetail || state.isUploading || state.isDeleting,
     allMaterials: (state) => {
       return [
         ...state.materials.roles,
@@ -93,7 +94,7 @@ export const useMaterialStore = defineStore('material', {
      * 获取素材详情
      */
     async fetchMaterial(materialId) {
-      this.isLoadingMaterials = true
+      this.isFetchingDetail = true
       this.error = null
 
       try {
@@ -103,7 +104,7 @@ export const useMaterialStore = defineStore('material', {
         this.error = error.message
         throw error
       } finally {
-        this.isLoadingMaterials = false
+        this.isFetchingDetail = false
       }
     },
 

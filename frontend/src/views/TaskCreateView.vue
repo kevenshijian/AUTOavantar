@@ -393,7 +393,7 @@
             <el-form-item>
               <el-button 
                 type="primary" 
-                :loading="generatingScript"
+                :loading="taskStore.isGeneratingScript"
                 @click="generateScript"
               >
                 <el-icon><MagicStick /></el-icon>
@@ -704,7 +704,7 @@
             <el-button 
               type="primary" 
               size="large"
-              :loading="submitting"
+              :loading="taskStore.isCreating"
               @click="submitTask(true)"
             >
               <el-icon><VideoPlay /></el-icon>
@@ -881,8 +881,6 @@ const showAudioSelectorDialog = ref(false)
 const showFaceAnalysisDialog = ref(false)
 const currentVideoType = ref('opening')
 const currentAudioType = ref('single')
-const submitting = ref(false)
-const generatingScript = ref(false)
 const faceAnalysisResult = ref(null)
 const fileInput = ref(null)
 const fileInputAccept = ref('')
@@ -1475,7 +1473,6 @@ const generateScript = async () => {
   const mode = taskForm.videoParams.dualMode ? 'dual' : 'single'
   const prompt = settingsStore.getPromptTemplate(mode)
   
-  generatingScript.value = true
   try {
     const result = await taskStore.generateScript({
       topic: content,
@@ -1490,8 +1487,6 @@ const generateScript = async () => {
     ElMessage.success('文案生成成功')
   } catch (error) {
     ElMessage.error('文案生成失败: ' + error.message)
-  } finally {
-    generatingScript.value = false
   }
 }
 
@@ -1889,7 +1884,6 @@ const submitTask = async (runImmediately) => {
   const content = taskForm.scriptContent.trim()
   const isValidJson = isValidScriptJson(content)
   
-  submitting.value = true
   try {
     let taskName = taskForm.name
     if (!taskName) {
@@ -2012,8 +2006,6 @@ const submitTask = async (runImmediately) => {
     router.push('/')
   } catch (error) {
     ElMessage.error('任务创建失败: ' + (error.response?.data?.detail || error.message || '未知错误'))
-  } finally {
-    submitting.value = false
   }
 }
 

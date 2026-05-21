@@ -5,7 +5,9 @@
 
 import asyncio
 import logging
+import os
 import platform
+import signal
 import subprocess
 from typing import List, Optional, Tuple
 
@@ -13,6 +15,17 @@ logger = logging.getLogger("async_subprocess")
 
 # Windows 平台静默创建进程的标志
 CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+
+
+def _kill_process_tree(pid: int) -> None:
+    """杀掉进程及其整个进程树，避免孤儿进程"""
+    if platform.system() == "Windows":
+        os.system(f"taskkill /F /T /PID {pid} >nul 2>&1")
+    else:
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
 
 
 async def async_run_subprocess(
@@ -46,10 +59,15 @@ async def async_run_subprocess(
             **kwargs
         )
 
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(),
-            timeout=timeout
-        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout
+            )
+        except asyncio.CancelledError:
+            _kill_process_tree(process.pid)
+            await process.wait()
+            raise
 
         if check and process.returncode != 0:
             raise subprocess.CalledProcessError(
@@ -60,13 +78,10 @@ async def async_run_subprocess(
         return process.returncode, stdout, stderr
 
     except asyncio.TimeoutError:
-        try:
-            process.kill()
-            await process.wait()
-        except Exception:
-            pass
+        _kill_process_tree(process.pid)
+        await process.wait()
         logger.warning(f"命令超时 ({timeout}s): {cmd[0]}")
-        return -1, b"", b"timeout"
+        raise subprocess.TimeoutExpired(cmd, timeout)
 
     except Exception as e:
         logger.error(f"命令执行失败: {e}")
@@ -102,14 +117,18 @@ async def async_run_ffprobe(
         logger.error(f"ffprobe 失败: {stderr.decode() if stderr else ''}")
         return {}
 
+    import json
     try:
-        import json
         return json.loads(stdout.decode())
-    except Exception:
+    except json.JSONDecodeError as e:
+        logger.error(f"ffprobe 输出 JSON 解析失败: {e}, raw: {stdout[:200]!r}")
+        return {}
+    except UnicodeDecodeError as e:
+        logger.error(f"ffprobe 输出解码失败: {e}")
         return {}
 
 
-async def async_run_ffmpeg(cmd: List[str], timeout: Optional[float] = None) -> Tuple[int, bytes, bytes]:
+async def async_run_ffmpeg(cmd: List[str], timeout: Optional[float] = None, check: bool = False) -> Tuple[int, bytes, bytes]:
     """
     异步执行 FFmpeg 命令
 
@@ -118,12 +137,15 @@ async def async_run_ffmpeg(cmd: List[str], timeout: Optional[float] = None) -> T
     Args:
         cmd: FFmpeg 命令列表（不含 -y）
         timeout: 超时时间（秒）
+        check: 是否检查返回码（非0时抛出异常）
 
     Returns:
         (returncode, stdout, stderr) 元组
     """
+    if not cmd or not cmd[0]:
+        raise ValueError("ffmpeg 命令列表不能为空")
     # 确保包含 -y 参数（覆盖输出文件）
     if "-y" not in cmd:
         cmd = [cmd[0], "-y"] + cmd[1:]
 
-    return await async_run_subprocess(cmd, timeout=timeout)
+    return await async_run_subprocess(cmd, timeout=timeout, check=check)

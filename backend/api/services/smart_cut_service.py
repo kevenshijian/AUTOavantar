@@ -7,7 +7,6 @@ import os
 import sys
 import json
 import logging
-import subprocess
 import platform
 import shutil
 import base64
@@ -262,11 +261,11 @@ class SmartCutService:
             video_info = await self._get_video_info(str(video_path))
         except Exception as e:
             # 清理临时文件
-            shutil.rmtree(video_temp_dir, ignore_errors=True)
+            await asyncio.to_thread(shutil.rmtree, video_temp_dir, ignore_errors=True)
             raise ValueError(f"视频文件损坏或无法读取")
 
         if not video_info.get("duration"):
-            shutil.rmtree(video_temp_dir, ignore_errors=True)
+            await asyncio.to_thread(shutil.rmtree, video_temp_dir, ignore_errors=True)
             raise ValueError(f"视频文件损坏或无法读取")
 
         # 6. 生成缩略图（保存为文件，DB 存路径而非 base64）
@@ -448,13 +447,13 @@ class SmartCutService:
                 video_id = parts[2]
                 temp_dir = self.temp_dir / video_id
                 if temp_dir.exists():
-                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
                     logger.info(f"已删除临时目录: {temp_dir}")
 
         # 删除片段临时目录（task_id 对应的整个目录）
         task_temp_dir = self.temp_dir / task_id
         if task_temp_dir.exists():
-            shutil.rmtree(task_temp_dir, ignore_errors=True)
+            await asyncio.to_thread(shutil.rmtree, task_temp_dir, ignore_errors=True)
             logger.info(f"已删除片段临时目录: {task_temp_dir}")
 
         # 删除片段视频和缩略图（处理不在临时目录内的片段）
@@ -531,7 +530,7 @@ class SmartCutService:
                 # 检查目录修改时间
                 dir_mtime = item.stat().st_mtime
                 if current_time - dir_mtime > max_age_seconds:
-                    shutil.rmtree(item, ignore_errors=True)
+                    await asyncio.to_thread(shutil.rmtree, item, ignore_errors=True)
                     logger.info(f"已清理过期临时目录: {item}")
 
     async def execute_smart_cut(
@@ -801,7 +800,7 @@ class SmartCutService:
 
         return segment_list
 
-    def _extract_segment(
+    async def _extract_segment(
         self,
         video_path: str,
         output_path: str,
@@ -1122,14 +1121,13 @@ class SmartCutService:
             logger.error(f"合成视频失败: {e}")
             return None
 
-    def _merge_basic(
+    async def _merge_basic(
         self,
         segment_files: List[str],
         output_path: str,
         width: int,
         height: int,
-        fps: int,
-        creationflags: int
+        fps: int
     ) -> bool:
         """基础拼接（无转场效果）"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1166,15 +1164,14 @@ class SmartCutService:
         finally:
             concat_file.unlink(missing_ok=True)
 
-    def _merge_with_transition(
+    async def _merge_with_transition(
         self,
         segment_files: List[str],
         output_path: str,
         width: int,
         height: int,
         fps: int,
-        transition: str,
-        creationflags: int
+        transition: str
     ) -> bool:
         """使用 xfade 滤镜实现转场效果"""
         try:
