@@ -1029,7 +1029,7 @@ class SmartCutService:
                             '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
                             str(video_audio)
                         ]
-                        audio_result = subprocess.run(cmd_audio, capture_output=True, text=True, timeout=60)
+                        audio_result = subprocess.run(cmd_audio, capture_output=True, text=True, timeout=60, creationflags=creationflags)
 
                         if audio_result.returncode == 0 and video_audio.exists():
                             # 混合BGM和原音频
@@ -1043,7 +1043,7 @@ class SmartCutService:
                                 '-map', '[aout]', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
                                 str(mixed_audio)
                             ]
-                            mix_result = subprocess.run(cmd_mix, capture_output=True, text=True, timeout=60)
+                            mix_result = subprocess.run(cmd_mix, capture_output=True, text=True, timeout=60, creationflags=creationflags)
 
                             if mix_result.returncode == 0 and mixed_audio.exists():
                                 # 用混合音频替换原视频音频
@@ -1057,7 +1057,7 @@ class SmartCutService:
                                     '-shortest',
                                     str(final_output)
                                 ]
-                                replace_result = subprocess.run(cmd_replace, capture_output=True, text=True, timeout=120)
+                                replace_result = subprocess.run(cmd_replace, capture_output=True, text=True, timeout=120, creationflags=creationflags)
 
                                 if replace_result.returncode == 0 and final_output.exists():
                                     output_path.unlink()
@@ -1071,7 +1071,26 @@ class SmartCutService:
                             video_audio.unlink(missing_ok=True)
                             mixed_audio.unlink(missing_ok=True)
                         else:
-                            logger.warning(f"提取视频音频失败，跳过BGM混入: {audio_result.stderr}")
+                            # 视频无音频轨道，直接将BGM作为唯一音频添加
+                            logger.info(f"视频无音频轨道，直接添加BGM作为音频")
+                            final_output = output_path.with_name(output_path.stem + '_bgm.mp4')
+                            cmd_add_bgm = [
+                                'ffmpeg', '-y',
+                                '-i', str(output_path),
+                                '-i', str(resolved_bgm),
+                                '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+                                '-map', '0:v', '-map', '1:a',
+                                '-shortest',
+                                str(final_output)
+                            ]
+                            add_bgm_result = subprocess.run(cmd_add_bgm, capture_output=True, text=True, timeout=120, creationflags=creationflags)
+
+                            if add_bgm_result.returncode == 0 and final_output.exists():
+                                output_path.unlink()
+                                final_output.rename(output_path)
+                                logger.info(f"BGM已作为唯一音频添加到合成视频: {output_path}")
+                            else:
+                                logger.warning(f"添加BGM失败: {add_bgm_result.stderr}")
                     else:
                         logger.warning(f"BGM文件不存在: {bgm_path}")
                 except Exception as e:

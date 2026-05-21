@@ -495,17 +495,40 @@ async def save_to_material(request: dict):
 
 
 async def _save_as_character(segments: list, service) -> dict:
-    """保存为角色素材"""
+    """保存为角色素材，将视频文件复制到 data/roles/ 目录"""
     import json
     import uuid
+    import shutil
 
-    # 生成角色ID和名称
-    mock_roles_json = _get_mock_roles()
-    mock_roles = json.loads(mock_roles_json)
-    role_id = f"r{len(mock_roles) + 1:03d}"
-    role_name = f"角色_{len(mock_roles) + 1}"
+    # 导入 materials 模块的函数和数据
+    from api.routers.materials import (
+        MOCK_ROLES, save_mock_roles, generate_role_thumbnail, resolve_video_path
+    )
+    from pathlib import Path
 
-    # 选择开场视频（第一个片段）
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+
+    role_id = f"r{len(MOCK_ROLES) + 1:03d}"
+    role_name = f"角色_{len(MOCK_ROLES) + 1}"
+
+    # 将视频文件复制到 backend/data/roles/ 目录
+    role_dir = project_root / "backend" / "data" / "roles"
+    role_dir.mkdir(parents=True, exist_ok=True)
+
+    def copy_video_to_role_dir(video_path_str: str) -> str:
+        if not video_path_str:
+            return ""
+        resolved = resolve_video_path(video_path_str)
+        if not resolved or not resolved.exists():
+            logger.warning(f"角色视频源文件不存在: {video_path_str}")
+            return video_path_str
+        dest_filename = f"role_{uuid.uuid4().hex[:8]}{resolved.suffix}"
+        dest_path = role_dir / dest_filename
+        shutil.copy2(str(resolved), str(dest_path))
+        logger.info(f"角色视频已复制到: {dest_path}")
+        return f"backend/data/roles/{dest_filename}"
+
+    # 分配视频：第一个为开场，其余为循环
     opening_video = None
     loop_videos = []
     ending_video = None
@@ -515,25 +538,19 @@ async def _save_as_character(segments: list, service) -> dict:
         if not video_path:
             continue
 
-        full_path = service.base_dir / video_path
-        if full_path.exists():
-            if opening_video is None:
-                opening_video = str(full_path.relative_to(service.base_dir))
-            else:
-                loop_videos.append({"path": str(full_path.relative_to(service.base_dir))})
+        if opening_video is None:
+            opening_video = copy_video_to_role_dir(video_path)
+        else:
+            saved_path = copy_video_to_role_dir(video_path)
+            loop_videos.append({"path": saved_path})
 
     # 生成缩略图
-    thumbnail_path = _generate_role_thumbnail(opening_video or "", loop_videos, ending_video, role_id, service.base_dir)
-
-    # 保存到模拟数据
-    mock_data_path = service.base_dir / "data" / "mock_roles.json"
-    mock_data_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if mock_data_path.exists():
-        with open(mock_data_path, 'r', encoding='utf-8') as f:
-            mock_roles = json.load(f)
-    else:
-        mock_roles = []
+    thumbnail_path = generate_role_thumbnail(
+        opening_video=opening_video or "",
+        loop_videos=loop_videos,
+        ending_video=ending_video or "",
+        role_id=role_id
+    ) or ""
 
     new_role = {
         "role_id": role_id,
@@ -552,10 +569,9 @@ async def _save_as_character(segments: list, service) -> dict:
         "thumbnail": thumbnail_path
     }
 
-    mock_roles.append(new_role)
-
-    with open(mock_data_path, 'w', encoding='utf-8') as f:
-        json.dump(mock_roles, f, ensure_ascii=False, indent=2)
+    MOCK_ROLES.append(new_role)
+    save_mock_roles()
+    logger.info(f"智能裁剪保存角色素材: {role_id}, 视频数: {len(segments)}")
 
     return {
         "role_id": role_id,
@@ -566,154 +582,69 @@ async def _save_as_character(segments: list, service) -> dict:
 
 
 async def _save_as_scene(segments: list, service) -> dict:
-    """保存为场景素材"""
+    """保存为场景素材，将视频文件复制到 data/scenes/ 目录"""
     import json
+    import uuid
+    import shutil
 
-    # 生成场景ID和名称
-    mock_scenes_json = _get_mock_scenes()
-    mock_scenes = json.loads(mock_scenes_json)
-    scene_id = f"s{len(mock_scenes) + 1:03d}"
-    scene_name = f"场景_{len(mock_scenes) + 1}"
+    # 导入 materials 模块的函数和数据
+    from api.routers.materials import (
+        MOCK_SCENES, save_mock_scenes, generate_scene_thumbnail, resolve_video_path
+    )
+    from pathlib import Path
 
-    # 收集所有视频路径
-    scene_videos = []
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+
+    scene_id = f"s{len(MOCK_SCENES) + 1:03d}"
+    scene_name = f"场景_{len(MOCK_SCENES) + 1}"
+
+    # 将视频文件复制到 backend/data/scenes/ 目录
+    scene_dir = project_root / "backend" / "data" / "scenes"
+    scene_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_scene_videos = []
     for segment in segments:
         video_path = segment.get("video_path", "")
-        if video_path:
-            full_path = service.base_dir / video_path
-            if full_path.exists():
-                scene_videos.append({"path": str(full_path.relative_to(service.base_dir))})
+        if not video_path:
+            continue
+
+        resolved = resolve_video_path(video_path)
+        if not resolved or not resolved.exists():
+            logger.warning(f"场景视频源文件不存在: {video_path}")
+            continue
+
+        dest_filename = f"scene_{uuid.uuid4().hex[:8]}{resolved.suffix}"
+        dest_path = scene_dir / dest_filename
+        shutil.copy2(str(resolved), str(dest_path))
+        logger.info(f"场景视频已复制到: {dest_path}")
+        saved_scene_videos.append({"path": f"backend/data/scenes/{dest_filename}"})
 
     # 生成缩略图
-    thumbnail_path = _generate_scene_thumbnail(scene_videos, scene_id, service.base_dir)
-
-    # 保存到模拟数据
-    mock_data_path = service.base_dir / "data" / "mock_scenes.json"
-    mock_data_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if mock_data_path.exists():
-        with open(mock_data_path, 'r', encoding='utf-8') as f:
-            mock_scenes = json.load(f)
-    else:
-        mock_scenes = []
+    thumbnail_path = generate_scene_thumbnail(
+        scene_videos=saved_scene_videos,
+        scene_id=scene_id
+    ) or ""
 
     new_scene = {
         "scene_id": scene_id,
         "scene_name": scene_name,
         "scene_type": "场景",
-        "scene_videos": scene_videos,
+        "scene_videos": saved_scene_videos,
         "description": "",
-        "video_count": len(scene_videos),
+        "video_count": len(saved_scene_videos),
         "thumbnail": thumbnail_path
     }
 
-    mock_scenes.append(new_scene)
-
-    with open(mock_data_path, 'w', encoding='utf-8') as f:
-        json.dump(mock_scenes, f, ensure_ascii=False, indent=2)
+    MOCK_SCENES.append(new_scene)
+    save_mock_scenes()
+    logger.info(f"智能裁剪保存场景素材: {scene_id}, 视频数: {len(saved_scene_videos)}")
 
     return {
         "scene_id": scene_id,
         "scene_name": scene_name,
-        "video_count": len(scene_videos),
+        "video_count": len(saved_scene_videos),
         "thumbnail": thumbnail_path
     }
-
-
-def _get_mock_roles() -> str:
-    """获取模拟角色数据"""
-    from api.services.smart_cut_service import get_smart_cut_service
-    service = get_smart_cut_service()
-    mock_data_path = service.base_dir / "data" / "mock_roles.json"
-    if mock_data_path.exists():
-        with open(mock_data_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    return "[]"
-
-
-def _get_mock_scenes() -> str:
-    """获取模拟场景数据"""
-    from api.services.smart_cut_service import get_smart_cut_service
-    service = get_smart_cut_service()
-    mock_data_path = service.base_dir / "data" / "mock_scenes.json"
-    if mock_data_path.exists():
-        with open(mock_data_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    return "[]"
-
-
-def _generate_role_thumbnail(opening_video: str, loop_videos: list, ending_video: str, role_id: str, base_dir) -> str:
-    """生成角色缩略图"""
-    import base64
-    import cv2
-
-    # 选择视频
-    video_path = None
-    if opening_video:
-        video_path = opening_video
-    else:
-        all_videos = [{"path": v["path"]} for v in loop_videos]
-        if ending_video:
-            all_videos.append({"path": ending_video})
-        if all_videos:
-            video_path = all_videos[0]["path"]
-
-    if not video_path:
-        return ""
-
-    # 提取第一帧
-    full_video_path = base_dir / video_path
-    cap = cv2.VideoCapture(str(full_video_path))
-    if not cap.isOpened():
-        return ""
-
-    ret, frame = cap.read()
-    cap.release()
-
-    if not ret or frame is None:
-        return ""
-
-    # 保存缩略图文件
-    thumbnail_dir = base_dir / "data" / "thumbnails" / "roles"
-    thumbnail_dir.mkdir(parents=True, exist_ok=True)
-    thumbnail_path = thumbnail_dir / f"{role_id}.jpg"
-    cv2.imwrite(str(thumbnail_path), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-
-    # 返回相对路径
-    return f"data/thumbnails/roles/{role_id}.jpg"
-
-
-def _generate_scene_thumbnail(scene_videos: list, scene_id: str, base_dir) -> str:
-    """生成场景缩略图"""
-    import base64
-    import cv2
-
-    if not scene_videos:
-        return ""
-
-    # 选择第一个视频
-    video_path = scene_videos[0]["path"]
-
-    # 提取第一帧
-    full_video_path = base_dir / video_path
-    cap = cv2.VideoCapture(str(full_video_path))
-    if not cap.isOpened():
-        return ""
-
-    ret, frame = cap.read()
-    cap.release()
-
-    if not ret or frame is None:
-        return ""
-
-    # 保存缩略图文件
-    thumbnail_dir = base_dir / "data" / "thumbnails" / "scenes"
-    thumbnail_dir.mkdir(parents=True, exist_ok=True)
-    thumbnail_path = thumbnail_dir / f"{scene_id}.jpg"
-    cv2.imwrite(str(thumbnail_path), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-
-    # 返回相对路径
-    return f"data/thumbnails/scenes/{scene_id}.jpg"
 
 
 @router.get("/merged-videos", response_model=ApiResponse)
@@ -743,7 +674,7 @@ async def get_merged_videos():
                 frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
                 if fps > 0:
                     duration = frame_count / fps
-                cap.release()
+            cap.release()
         except Exception:
             pass
 
