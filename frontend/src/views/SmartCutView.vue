@@ -32,9 +32,17 @@
             <el-icon :size="32"><Document /></el-icon>
           </div>
           <div class="history-info">
-            <div class="history-name">{{ item.video_name }}</div>
+            <div class="history-name">
+              {{ item.video_name }}
+              <el-tag
+                :type="getStatusTagType(item.status)"
+                size="small"
+                class="status-tag"
+              >{{ getStatusLabel(item.status) }}</el-tag>
+            </div>
             <div class="history-meta">
-              <span>{{ item.segments_count }} 个片段</span>
+              <span v-if="item.status !== 'uploaded'">{{ item.segments_count || (item.segments_info ? item.segments_info.length : 0) }} 个片段</span>
+              <span v-else>未裁剪</span>
               <span>{{ formatDuration(item.video_duration) }}</span>
             </div>
             <div class="history-time">{{ formatDateTime(item.created_at) }}</div>
@@ -1208,6 +1216,29 @@ const loadHistory = async () => {
 const restoreHistory = async (item) => {
   currentTaskId.value = item.task_id
   isFromHistory.value = true
+
+  // uploaded状态：恢复上传信息，不加载片段
+  if (item.status === 'uploaded') {
+    videoInfo.value = {
+      video_id: item.task_id,
+      video_name: item.video_name,
+      video_path: item.video_path,
+      duration: item.video_duration,
+      fps: item.video_fps,
+      width: item.video_width,
+      height: item.video_height,
+      total_frames: item.total_frames,
+      thumbnail: item.thumbnail || ''
+    }
+    if (item.video_path) {
+      videoUrl.value = `/files/${item.video_path}`
+    }
+    segments.value = []
+    ElMessage.success('已恢复上传状态，可继续裁剪')
+    return
+  }
+
+  // 其他状态：恢复裁剪结果
   try {
     const res = await smartCutApi.getSegments(item.task_id)
     if (res.code === 200 && res.data.segments) {
@@ -1231,6 +1262,30 @@ const restoreHistory = async (item) => {
     console.error('恢复历史记录失败:', error)
     ElMessage.error('恢复历史记录失败')
   }
+}
+
+// 状态标签映射
+const getStatusLabel = (status) => {
+  const map = {
+    uploaded: '已上传',
+    pending: '等待中',
+    processing: '裁剪中',
+    completed: '已完成',
+    failed: '失败'
+  }
+  return map[status] || status
+}
+
+// 状态标签颜色映射
+const getStatusTagType = (status) => {
+  const map = {
+    uploaded: 'info',
+    pending: 'warning',
+    processing: '',
+    completed: 'success',
+    failed: 'danger'
+  }
+  return map[status] || 'info'
 }
 
 // 返回历史记录列表
@@ -1741,6 +1796,13 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-tag {
+  flex-shrink: 0;
 }
 
 .history-meta {

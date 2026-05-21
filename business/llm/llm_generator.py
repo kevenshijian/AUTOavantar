@@ -55,6 +55,12 @@ class LLMScriptGenerator:
         client = self._get_client()
 
         try:
+            kwargs = {}
+            is_reasoning_model = "pro" in self.model.lower() or "reasoner" in self.model.lower()
+            if is_reasoning_model:
+                kwargs["reasoning_effort"] = "high"
+                kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+
             response = client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -64,8 +70,7 @@ class LLMScriptGenerator:
                 stream=False,
                 temperature=0.7,
                 max_tokens=2048,
-                reasoning_effort="high",
-                extra_body={"thinking": {"type": "enabled"}}
+                **kwargs
             )
 
             content = response.choices[0].message.content

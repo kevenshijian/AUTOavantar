@@ -152,27 +152,36 @@ async def create_task(
 
         existing_task = await db.smart_cut_task_get_by_video_path(request.video_path)
         if existing_task:
-            logger.warning(f"视频已有进行中的任务: {request.video_path} -> {existing_task['task_id']}")
-            return ApiResponse(
-                code=400,
-                message="当前视频已有裁剪任务正在进行中"
+            if existing_task['status'] == 'uploaded':
+                # 已有uploaded记录，复用该task_id，更新状态为processing
+                task_id = existing_task['task_id']
+                await db.smart_cut_task_update(task_id, {
+                    "status": "pending",
+                    "config": request.config
+                })
+                logger.info(f"复用已上传记录启动裁剪: {task_id}")
+            else:
+                logger.warning(f"视频已有进行中的任务: {request.video_path} -> {existing_task['task_id']}")
+                return ApiResponse(
+                    code=400,
+                    message="当前视频已有裁剪任务正在进行中"
+                )
+        else:
+            # 4. 生成任务ID
+            task_id = generate_task_id()
+
+            # 5. 创建任务记录（兼容旧流程）
+            await db.smart_cut_task_create(
+                task_id=task_id,
+                video_path=request.video_path,
+                video_name=request.video_name,
+                video_duration=request.duration,
+                video_fps=request.fps,
+                video_width=request.width,
+                video_height=request.height,
+                total_frames=request.total_frames,
+                config=request.config
             )
-
-        # 4. 生成任务ID
-        task_id = generate_task_id()
-
-        # 5. 创建任务记录
-        await db.smart_cut_task_create(
-            task_id=task_id,
-            video_path=request.video_path,
-            video_name=request.video_name,
-            video_duration=request.duration,
-            video_fps=request.fps,
-            video_width=request.width,
-            video_height=request.height,
-            total_frames=request.total_frames,
-            config=request.config
-        )
 
         # 6. 启动异步识别任务
         background_tasks.add_task(

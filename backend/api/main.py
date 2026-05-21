@@ -183,7 +183,7 @@ async def lifespan(app: FastAPI):
     try:
         from api.services.smart_cut_service import get_smart_cut_service
         smart_cut_service = get_smart_cut_service()
-        smart_cut_service.cleanup_temp_files(max_age_hours=24)
+        await smart_cut_service.cleanup_temp_files(max_age_hours=24)
         logger.info("智能裁剪临时文件清理完成")
     except Exception as e:
         logger.warning(f"临时文件清理失败: {e}")

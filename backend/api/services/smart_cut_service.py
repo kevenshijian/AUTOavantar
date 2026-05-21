@@ -279,10 +279,42 @@ class SmartCutService:
             shutil.rmtree(video_temp_dir, ignore_errors=True)
             raise ValueError(f"视频文件损坏或无法读取")
 
-        # 6. 生成缩略图
+        # 6. 生成缩略图（保存为文件，DB 存路径而非 base64）
         thumbnail_base64 = self._generate_thumbnail_base64(str(video_path))
+        thumbnail_path = video_temp_dir / "thumb.jpg"
+        thumbnail_relative = ""
+        if thumbnail_base64:
+            try:
+                # 从 base64 解码保存为文件
+                b64_data = re.sub(r'^data:image/\w+;base64,', '', thumbnail_base64)
+                with open(thumbnail_path, "wb") as f:
+                    f.write(base64.b64decode(b64_data))
+                thumbnail_relative = str(thumbnail_path.relative_to(self.base_dir))
+            except Exception as e:
+                logger.warning(f"缩略图文件保存失败: {e}")
 
-        # 7. 返回结果
+        # 7. 上传即保存历史记录
+        try:
+            from api.services.database import get_database_service
+            db = get_database_service()
+            relative_path = str(video_path.relative_to(self.base_dir))
+            await db.smart_cut_task_create(
+                task_id=video_id,
+                video_path=relative_path,
+                video_name=filename,
+                video_duration=video_info.get("duration", 0),
+                video_fps=video_info.get("fps", 0),
+                video_width=video_info.get("width", 0),
+                video_height=video_info.get("height", 0),
+                total_frames=video_info.get("total_frames", 0),
+                status="uploaded",
+                thumbnail=thumbnail_relative
+            )
+            logger.info(f"上传视频历史记录已保存: {video_id}")
+        except Exception as e:
+            logger.warning(f"保存上传历史记录失败（不影响上传功能）: {e}")
+
+        # 8. 返回结果
         return {
             "video_id": video_id,
             "video_path": str(video_path.relative_to(self.base_dir)),
@@ -292,7 +324,8 @@ class SmartCutService:
             "width": video_info.get("width", 0),
             "height": video_info.get("height", 0),
             "total_frames": video_info.get("total_frames", 0),
-            "thumbnail": thumbnail_base64 or ""
+            "thumbnail": thumbnail_base64 or "",
+            "thumbnail_path": thumbnail_relative
         }
 
     async def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -358,20 +391,20 @@ class SmartCutService:
         }
 
     async def get_history(self) -> List[Dict[str, Any]]:
-        """
-        获取历史记录列表
-
-        Returns:
-            已完成的裁剪任务列表，按时间倒序排列
-        """
+        """获取智能裁剪历史记录（包括已上传未裁剪的记录）"""
         from api.services.database import get_database_service
 
         db = get_database_service()
-        tasks = await db.smart_cut_task_get_completed()
+        # 获取所有状态的任务记录（不限制数量）
+        tasks, _ = await db.smart_cut_task_list(limit=10000)
 
         history_list = []
         for task in tasks:
             segments_info = json.loads(task.get("segments_info") or "[]")
+            # thumbnail: 文件路径（兼容旧 base64 数据，不再返回 base64 避免响应膨胀）
+            thumbnail = task.get("thumbnail", "")
+            if thumbnail and thumbnail.startswith("data:"):
+                thumbnail = ""
             history_list.append({
                 "task_id": task["task_id"],
                 "video_path": task.get("video_path", ""),
@@ -382,10 +415,14 @@ class SmartCutService:
                 "video_height": task["video_height"] or 0,
                 "total_frames": task["total_frames"] or 0,
                 "segments_count": len(segments_info),
+                "segments_info": segments_info,
+                "thumbnail": thumbnail,
                 "created_at": task["created_at"],
                 "status": task["status"]
             })
 
+        # 按创建时间倒序
+        history_list.sort(key=lambda x: x.get("created_at", ""), reverse=True)
         return history_list
 
     async def delete_task(self, task_id: str) -> bool:
@@ -472,20 +509,35 @@ class SmartCutService:
         logger.info(f"任务 {task_id} 及其所有文件已删除")
         return True
 
-    def cleanup_temp_files(self, max_age_hours: int = 24):
-        """
-        清理过期的临时文件
-
-        Args:
-            max_age_hours: 最大保留时间（小时）
-        """
+    async def cleanup_temp_files(self, max_age_hours: int = 24):
+        """清理过期的临时文件，但保留有数据库记录的目录"""
         import time
+
+        # 获取所有有数据库记录的video_id
+        active_video_ids = set()
+        try:
+            from api.services.database import get_database_service
+            db = get_database_service()
+            tasks, _ = await db.smart_cut_task_list(limit=10000)
+            for task in tasks:
+                # task_id 本身可能是 video_id（uploaded状态）
+                active_video_ids.add(task["task_id"])
+                # 从 video_path 提取 video_id（目录名）
+                video_path = task.get("video_path", "")
+                parts = Path(video_path).parts
+                if len(parts) >= 3 and parts[0] == "temp" and parts[1] == "smart_cut":
+                    active_video_ids.add(parts[2])
+        except Exception as e:
+            logger.warning(f"获取活跃任务列表失败: {e}")
 
         current_time = time.time()
         max_age_seconds = max_age_hours * 3600
 
         for item in self.temp_dir.iterdir():
             if item.is_dir():
+                # 跳过有数据库记录的目录
+                if item.name in active_video_ids:
+                    continue
                 # 检查目录修改时间
                 dir_mtime = item.stat().st_mtime
                 if current_time - dir_mtime > max_age_seconds:

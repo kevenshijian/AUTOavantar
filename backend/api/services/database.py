@@ -204,12 +204,19 @@ class DatabaseService:
                 config TEXT,
                 segments_info TEXT,
                 error_message TEXT,
+                thumbnail TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_smart_cut_task_id ON smart_cut_tasks(task_id)")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_smart_cut_status ON smart_cut_tasks(status)")
+
+        # 迁移：为已有数据库添加 thumbnail 列
+        try:
+            await cursor.execute("ALTER TABLE smart_cut_tasks ADD COLUMN thumbnail TEXT")
+        except Exception:
+            pass  # 列已存在则忽略
 
         await self._init_tag_tables(conn)
 
@@ -813,7 +820,9 @@ class DatabaseService:
         video_width: int = 0,
         video_height: int = 0,
         total_frames: int = 0,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        status: str = "pending",
+        thumbnail: Optional[str] = None
     ) -> int:
         """创建智能裁剪任务"""
         async with self.get_connection() as conn:
@@ -824,16 +833,17 @@ class DatabaseService:
                 INSERT INTO smart_cut_tasks (
                     task_id, video_path, video_name, video_duration, video_fps,
                     video_width, video_height, total_frames, status, progress,
-                    current_stage, config, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, '', ?, ?, ?)
+                    current_stage, config, thumbnail, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, ?, ?)
             """, (
                 task_id, video_path, video_name, video_duration, video_fps,
-                video_width, video_height, total_frames,
-                json.dumps(config) if config else None, now, now
+                video_width, video_height, total_frames, status,
+                json.dumps(config) if config else None,
+                thumbnail, now, now
             ))
 
             await conn.commit()
-            logger.info(f"智能裁剪任务创建成功: {task_id}")
+            logger.info(f"智能裁剪任务创建成功: {task_id}, 状态: {status}")
             return cursor.lastrowid
 
     async def smart_cut_task_get_by_id(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -877,7 +887,11 @@ class DatabaseService:
                 "progress": "progress",
                 "current_stage": "current_stage",
                 "segments_info": "segments_info",
-                "error_message": "error_message"
+                "error_message": "error_message",
+                "config": "config",
+                "thumbnail": "thumbnail",
+                "video_name": "video_name",
+                "video_duration": "video_duration"
             }
 
             for key, column in field_mapping.items():
@@ -972,29 +986,17 @@ class DatabaseService:
             return [dict(row) for row in rows]
 
     async def smart_cut_task_get_by_video_path(self, video_path: str) -> Optional[Dict[str, Any]]:
-        """根据视频路径获取进行中的智能裁剪任务"""
+        """根据视频路径获取智能裁剪任务（包括uploaded状态）"""
         async with self.get_connection() as conn:
             cursor = await conn.cursor()
             await cursor.execute(
                 """SELECT * FROM smart_cut_tasks
-                   WHERE video_path = ? AND status IN ('pending', 'processing')
+                   WHERE video_path = ? AND status IN ('uploaded', 'pending', 'processing')
                    ORDER BY created_at DESC LIMIT 1""",
                 (video_path,)
             )
             row = await cursor.fetchone()
             return dict(row) if row else None
-
-    async def smart_cut_task_get_completed(self) -> List[Dict[str, Any]]:
-        """获取所有已完成的智能裁剪任务（历史记录）"""
-        async with self.get_connection() as conn:
-            cursor = await conn.cursor()
-            await cursor.execute(
-                """SELECT * FROM smart_cut_tasks
-                   WHERE status = 'completed'
-                   ORDER BY created_at DESC"""
-            )
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
 
 
 # 全局数据库服务实例
