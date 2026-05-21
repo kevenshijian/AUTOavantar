@@ -1974,13 +1974,19 @@ const handleSmartCutParams = () => {
 
           // 填充视频数据
           if (type === 'character') {
-            // 角色创建：将第一个视频作为开场视频，其余作为循环视频
+            // 角色创建：第一个视频=开场，最后一个=结束，中间=循环
             createForm.opening_video = videoList[0].path
-            if (videoList.length > 1) {
-              createForm.loop_videos = videoList.slice(1).map(v => ({
+            if (videoList.length === 2) {
+              // 只有2个视频：开场+结束，无循环
+              createForm.ending_video = videoList[1].path
+              createForm.loop_videos = []
+            } else if (videoList.length > 2) {
+              // 3个及以上：开场+循环+结束
+              createForm.loop_videos = videoList.slice(1, -1).map(v => ({
                 path: v.path,
                 emotion: 'calm'
               }))
+              createForm.ending_video = videoList[videoList.length - 1].path
             }
             ElMessage.success(`已添加 ${videoList.length} 个视频到角色素材`)
           } else if (type === 'scene') {

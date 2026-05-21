@@ -128,6 +128,9 @@ export const materialApi = {
   // 删除素材
   delete: (materialId, type) => request.delete(`/api/materials/${materialId}`, { params: { type } }),
 
+  // 获取BGM列表
+  getBGM: () => request.get('/api/materials/bgm'),
+
   // 上传素材文件
   uploadMaterial: (formData) => request.post('/api/materials/upload', formData, {
     headers: {
@@ -282,7 +285,13 @@ export const smartCutApi = {
   getHistory: () => request.get('/api/smart-cut/history'),
 
   // 保存到素材库
-  saveToMaterial: (data) => request.post('/api/smart-cut/save-to-material', data)
+  saveToMaterial: (data) => request.post('/api/smart-cut/save-to-material', data),
+
+  // 获取合成视频列表
+  getMergedVideos: () => request.get('/api/smart-cut/merged-videos'),
+
+  // 删除合成视频
+  deleteMergedVideo: (filename) => request.delete(`/api/smart-cut/merged-videos/${filename}`)
 }
 
 // 导出便捷方法

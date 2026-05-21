@@ -49,6 +49,7 @@ class SmartCutMergeRequest(BaseModel):
     resolution: str = "1080p"
     fps: int = 30
     transition: str = "none"
+    bgm_path: Optional[str] = None
 
 
 class SmartCutExtractAudioRequest(BaseModel):
@@ -354,7 +355,8 @@ async def merge_videos(
             output_name=request.output_name,
             resolution=request.resolution,
             fps=request.fps,
-            transition=request.transition
+            transition=request.transition,
+            bgm_path=request.bgm_path
         )
 
         if result:
@@ -712,3 +714,83 @@ def _generate_scene_thumbnail(scene_videos: list, scene_id: str, base_dir) -> st
 
     # 返回相对路径
     return f"data/thumbnails/scenes/{scene_id}.jpg"
+
+
+@router.get("/merged-videos", response_model=ApiResponse)
+async def get_merged_videos():
+    """
+    获取合成视频列表
+
+    返回 output 目录中所有合成视频文件的信息
+    """
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    output_dir = project_root / "output"
+
+    if not output_dir.exists():
+        return ApiResponse(code=200, message="success", data={"videos": []})
+
+    videos = []
+    for f in sorted(output_dir.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
+        # 获取视频时长
+        duration = 0.0
+        try:
+            import cv2
+            cap = cv2.VideoCapture(str(f))
+            if cap.isOpened():
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                if fps > 0:
+                    duration = frame_count / fps
+                cap.release()
+        except Exception:
+            pass
+
+        videos.append({
+            "name": f.stem,
+            "path": f"output/{f.name}",
+            "size": f.stat().st_size,
+            "duration": round(duration, 2),
+            "created_at": datetime.fromtimestamp(f.stat().st_mtime).isoformat()
+        })
+
+    return ApiResponse(code=200, message="success", data={"videos": videos})
+
+
+@router.delete("/merged-videos/{filename}", response_model=ApiResponse)
+async def delete_merged_video(filename: str):
+    """
+    删除合成视频文件
+
+    从 output 目录中删除指定的合成视频
+    """
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    output_dir = project_root / "output"
+
+    video_file = output_dir / filename
+
+    if not video_file.exists():
+        return ApiResponse(
+            code=404,
+            message="文件不存在"
+        )
+
+    # 安全检查：确保文件在 output 目录内
+    try:
+        video_file.resolve().relative_to(output_dir.resolve())
+    except ValueError:
+        return ApiResponse(
+            code=400,
+            message="非法路径"
+        )
+
+    video_file.unlink()
+    logger.info(f"已删除合成视频: {filename}")
+
+    return ApiResponse(
+        code=200,
+        message="删除成功"
+    )

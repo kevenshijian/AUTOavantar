@@ -419,6 +419,11 @@
             </div>
           </div>
         </el-form-item>
+        <el-form-item label="背景音乐">
+          <el-select v-model="mergeConfig.bgm_path" placeholder="不添加BGM" clearable style="width: 100%">
+            <el-option v-for="bgm in bgmList" :key="bgm.bgm_id" :label="bgm.bgm_name" :value="bgm.path" />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="mergeDialogVisible = false">取消</el-button>
@@ -482,7 +487,7 @@ import {
   Back,
   Headset
 } from '@element-plus/icons-vue'
-import { smartCutApi } from '@/services/api'
+import { smartCutApi, materialApi } from '@/services/api'
 
 const router = useRouter()
 
@@ -554,8 +559,25 @@ const mergeConfig = reactive({
   transitionType: '淡入淡出',
   transitionRandom: false,
   transitionRandomAll: false,
-  transitionDuration: 1.0
+  transitionDuration: 1.0,
+  bgm_path: ''
 })
+
+// BGM列表
+const bgmList = ref([])
+const loadingBgm = ref(false)
+
+const fetchBgmList = async () => {
+  loadingBgm.value = true
+  try {
+    const res = await materialApi.getBGM()
+    bgmList.value = Array.isArray(res) ? res : (res.data || [])
+  } catch (error) {
+    console.error('获取BGM列表失败:', error)
+  } finally {
+    loadingBgm.value = false
+  }
+}
 
 // 转场效果分类
 const transitionCategories = ref(['淡入淡出', '滑动擦除', '图形变换', '特效切片'])
@@ -1064,6 +1086,7 @@ const extractOriginalAudio = async () => {
 const showMergeDialog = () => {
   mergeConfig.output_name = `merged_${new Date().toISOString().slice(0, 10)}`
   mergeDialogVisible.value = true
+  fetchBgmList()
 }
 
 const mergeVideos = async () => {
@@ -1086,7 +1109,8 @@ const mergeVideos = async () => {
       transition: mergeConfig.transition,
       transitionRandom: mergeConfig.transitionRandom,
       transitionRandomAll: mergeConfig.transitionRandomAll,
-      transitionDuration: mergeConfig.transitionDuration
+      transitionDuration: mergeConfig.transitionDuration,
+      bgm_path: mergeConfig.bgm_path || undefined
     })
 
     if (response.code === 200) {

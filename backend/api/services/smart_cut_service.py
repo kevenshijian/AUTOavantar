@@ -424,22 +424,48 @@ class SmartCutService:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     logger.info(f"已删除临时目录: {temp_dir}")
 
-        # 删除片段视频和缩略图
+        # 删除片段临时目录（task_id 对应的整个目录）
+        task_temp_dir = self.temp_dir / task_id
+        if task_temp_dir.exists():
+            shutil.rmtree(task_temp_dir, ignore_errors=True)
+            logger.info(f"已删除片段临时目录: {task_temp_dir}")
+
+        # 删除片段视频和缩略图（处理不在临时目录内的片段）
         try:
             segments_info = json.loads(task.get("segments_info") or "[]")
+            deleted_dirs = set()
             for segment in segments_info:
                 segment_path = segment.get("video_path", "")
                 thumbnail_path = segment.get("thumbnail", "")
 
                 # 删除片段视频
-                if segment_path and Path(segment_path).exists():
-                    Path(segment_path).unlink()
-                    logger.info(f"已删除片段视频: {segment_path}")
+                if segment_path:
+                    full_path = self.base_dir / segment_path if not Path(segment_path).is_absolute() else Path(segment_path)
+                    if full_path.exists():
+                        full_path.unlink()
+                        logger.info(f"已删除片段视频: {segment_path}")
+                        deleted_dirs.add(full_path.parent)
 
                 # 删除缩略图
-                if thumbnail_path and Path(thumbnail_path).exists():
-                    Path(thumbnail_path).unlink()
-                    logger.info(f"已删除缩略图: {thumbnail_path}")
+                if thumbnail_path:
+                    full_path = self.base_dir / thumbnail_path if not Path(thumbnail_path).is_absolute() else Path(thumbnail_path)
+                    if full_path.exists():
+                        full_path.unlink()
+                        logger.info(f"已删除缩略图: {thumbnail_path}")
+                        deleted_dirs.add(full_path.parent)
+
+            # 清理空目录
+            for dir_path in deleted_dirs:
+                try:
+                    if dir_path.exists() and not any(dir_path.iterdir()):
+                        dir_path.rmdir()
+                        # 继续向上清理空目录
+                        parent = dir_path.parent
+                        while parent != self.base_dir and parent.exists() and not any(parent.iterdir()):
+                            parent.rmdir()
+                            parent = parent.parent
+                except OSError:
+                    pass
         except Exception as e:
             logger.error(f"删除片段文件时出错: {e}")
 
@@ -881,7 +907,8 @@ class SmartCutService:
         output_name: str = "",
         resolution: str = "1080p",
         fps: int = 30,
-        transition: str = "none"
+        transition: str = "none",
+        bgm_path: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         合成视频片段
@@ -897,8 +924,8 @@ class SmartCutService:
             包含 output_path, duration, file_size 的字典
         """
         try:
-            # 创建输出目录
-            output_dir = self.base_dir / "output"
+            # 创建输出目录（项目根目录下的 output）
+            output_dir = self.base_dir.parent / "output"
             output_dir.mkdir(parents=True, exist_ok=True)
 
             # 生成输出文件名
@@ -924,6 +951,28 @@ class SmartCutService:
             if not segment_files:
                 logger.error("没有有效的片段文件")
                 return None
+
+            # 检测片段实际宽高比，竖屏片段自动翻转输出分辨率
+            try:
+                cmd_probe = [
+                    "ffprobe", "-v", "error",
+                    "-show_entries", "stream=width,height",
+                    "-of", "json",
+                    segment_files[0]
+                ]
+                creationflags_probe = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+                probe_result = subprocess.run(cmd_probe, capture_output=True, text=True, creationflags=creationflags_probe)
+                if probe_result.returncode == 0:
+                    probe_data = json.loads(probe_result.stdout)
+                    streams = probe_data.get("streams", [])
+                    if streams:
+                        src_w = int(streams[0].get("width", 0))
+                        src_h = int(streams[0].get("height", 0))
+                        if src_h > src_w and width > height:
+                            width, height = height, width
+                            logger.info(f"检测到竖屏片段({src_w}x{src_h})，输出分辨率调整为 {width}x{height}")
+            except Exception as e:
+                logger.warning(f"检测片段分辨率失败: {e}")
 
             creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
 
@@ -958,6 +1007,76 @@ class SmartCutService:
             if not result:
                 return None
 
+            # 如果有BGM，混入音频
+            if bgm_path:
+                try:
+                    resolved_bgm = Path(bgm_path)
+                    if not resolved_bgm.is_absolute():
+                        project_root = self.base_dir.parent
+                        candidate = project_root / bgm_path
+                        if candidate.exists():
+                            resolved_bgm = candidate
+                        else:
+                            candidate2 = self.base_dir / bgm_path
+                            if candidate2.exists():
+                                resolved_bgm = candidate2
+
+                    if resolved_bgm.exists():
+                        # 先提取合成视频的音频
+                        video_audio = output_path.with_suffix('.audio.wav')
+                        cmd_audio = [
+                            'ffmpeg', '-y', '-i', str(output_path),
+                            '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
+                            str(video_audio)
+                        ]
+                        audio_result = subprocess.run(cmd_audio, capture_output=True, text=True, timeout=60)
+
+                        if audio_result.returncode == 0 and video_audio.exists():
+                            # 混合BGM和原音频
+                            mixed_audio = output_path.with_suffix('.mixed.wav')
+                            cmd_mix = [
+                                'ffmpeg', '-y',
+                                '-i', str(video_audio),
+                                '-i', str(resolved_bgm),
+                                '-filter_complex',
+                                '[0:a]volume=1.0[a0];[1:a]volume=0.3[a1];[a0][a1]amix=inputs=2:duration=longest[aout]',
+                                '-map', '[aout]', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
+                                str(mixed_audio)
+                            ]
+                            mix_result = subprocess.run(cmd_mix, capture_output=True, text=True, timeout=60)
+
+                            if mix_result.returncode == 0 and mixed_audio.exists():
+                                # 用混合音频替换原视频音频
+                                final_output = output_path.with_name(output_path.stem + '_final.mp4')
+                                cmd_replace = [
+                                    'ffmpeg', '-y',
+                                    '-i', str(output_path),
+                                    '-i', str(mixed_audio),
+                                    '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+                                    '-map', '0:v', '-map', '1:a',
+                                    '-shortest',
+                                    str(final_output)
+                                ]
+                                replace_result = subprocess.run(cmd_replace, capture_output=True, text=True, timeout=120)
+
+                                if replace_result.returncode == 0 and final_output.exists():
+                                    output_path.unlink()
+                                    final_output.rename(output_path)
+                                    logger.info(f"BGM已混入合成视频: {output_path}")
+                                else:
+                                    logger.warning(f"替换音频失败: {replace_result.stderr}")
+                            else:
+                                logger.warning(f"混合音频失败: {mix_result.stderr}")
+
+                            video_audio.unlink(missing_ok=True)
+                            mixed_audio.unlink(missing_ok=True)
+                        else:
+                            logger.warning(f"提取视频音频失败，跳过BGM混入: {audio_result.stderr}")
+                    else:
+                        logger.warning(f"BGM文件不存在: {bgm_path}")
+                except Exception as e:
+                    logger.error(f"混入BGM失败: {e}")
+
             # 获取输出文件信息
             file_size = output_path.stat().st_size
             duration = self._get_video_duration(str(output_path))
@@ -965,7 +1084,7 @@ class SmartCutService:
             logger.info(f"视频合成成功: {output_path}")
 
             return {
-                "output_path": str(output_path.relative_to(self.base_dir)),
+                "output_path": str(output_path.relative_to(self.base_dir.parent)),
                 "duration": duration,
                 "file_size": file_size
             }

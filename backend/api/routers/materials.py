@@ -96,7 +96,7 @@ import base64
 
 # 使用已定义的 project_root 作为项目根目录（AUTOavantar）
 BASE_DIR = project_root
-THUMBNAIL_DIR = BASE_DIR / "data" / "thumbnails"
+THUMBNAIL_DIR = BASE_DIR / "backend" / "data" / "thumbnails"
 THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
 (THUMBNAIL_DIR / "roles").mkdir(exist_ok=True)
 (THUMBNAIL_DIR / "scenes").mkdir(exist_ok=True)
@@ -182,7 +182,7 @@ def generate_role_thumbnail(
         with open(thumbnail_path, 'wb') as f:
             f.write(base64.b64decode(frame_base64))
         # 返回相对路径，便于跨机器使用
-        return f"data/thumbnails/roles/{role_id}.jpg"
+        return f"backend/data/thumbnails/roles/{role_id}.jpg"
     except Exception as e:
         logger.warning(f"保存缩略图失败: {e}")
         return None
@@ -233,7 +233,7 @@ def generate_scene_thumbnail(
         with open(thumbnail_path, 'wb') as f:
             f.write(base64.b64decode(frame_base64))
         # 返回相对路径，便于跨机器使用
-        return f"data/thumbnails/scenes/{scene_id}.jpg"
+        return f"backend/data/thumbnails/scenes/{scene_id}.jpg"
     except Exception as e:
         logger.warning(f"保存缩略图失败: {e}")
         return None

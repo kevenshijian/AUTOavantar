@@ -302,6 +302,7 @@ if os.path.exists("uploads"):
             backend_root / "data" / file_path,
             Path.cwd().parent / "uploads" / file_path,  # 项目根目录下的 uploads
             Path.cwd().parent / "backend" / file_path,  # 项目根目录下的 backend
+            Path.cwd().parent / file_path,  # 项目根目录下直接查找（兼容 data/thumbnails 等路径）
         ]
         
         file_full_path = None

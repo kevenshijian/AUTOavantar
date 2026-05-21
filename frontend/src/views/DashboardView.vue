@@ -147,6 +147,45 @@
         </div>
         <el-empty v-else description="暂无已完成任务" :image-size="80" />
       </div>
+
+      <!-- 合成视频区域 -->
+      <div class="section-merged" v-if="mergedVideos.length > 0">
+        <div class="panel-header">
+          <h4><el-icon><Film /></el-icon> 合成视频</h4>
+          <span class="count-badge">{{ mergedVideos.length }}</span>
+        </div>
+        <div class="completed-grid">
+          <div
+            v-for="video in mergedVideos"
+            :key="video.path"
+            class="completed-card"
+          >
+            <div class="card-thumbnail">
+              <video :src="getVideoUrl(video.path)" muted @mouseenter="hoverVideo" @mouseleave="leaveVideo" />
+              <div class="card-overlay">
+                <el-button type="primary" circle @click="previewMerged(video)">
+                  <el-icon><VideoPlay /></el-icon>
+                </el-button>
+              </div>
+            </div>
+            <div class="card-info">
+              <span class="card-name">{{ video.name }}</span>
+              <div class="card-meta">
+                <el-tag size="small" type="info">合成</el-tag>
+                <span class="card-time">{{ formatTime(video.created_at) }}</span>
+              </div>
+            </div>
+            <div class="card-actions">
+              <el-button type="success" size="small" circle @click="openMergedDir">
+                <el-icon><Download /></el-icon>
+              </el-button>
+              <el-button type="danger" size="small" circle @click="deleteMergedVideo(video)">
+                <el-icon><Delete /></el-icon>
+              </el-button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <el-dialog v-model="showPreview" title="视频预览" width="800px" center @close="closePreview">
@@ -170,7 +209,7 @@
 import { ref, computed, onMounted, onUnmounted, inject } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTaskStore } from '@/stores/taskStore'
-import { taskApi, functionsApi } from '@/services/api'
+import { taskApi, functionsApi, smartCutApi } from '@/services/api'
 import { ElMessage } from 'element-plus'
 import websocketService from '@/services/websocket'
 
@@ -361,8 +400,52 @@ const leaveVideo = (e) => {
   e.target.currentTime = 0
 }
 
+// 合成视频
+const mergedVideos = ref([])
+
+const fetchMergedVideos = async () => {
+  try {
+    const res = await smartCutApi.getMergedVideos()
+    if (res.code === 200) {
+      mergedVideos.value = res.data.videos || []
+    }
+  } catch (error) {
+    console.error('获取合成视频列表失败:', error)
+  }
+}
+
+const previewMerged = (video) => {
+  previewUrl.value = getVideoUrl(video.path)
+  showPreview.value = true
+}
+
+const deleteMergedVideo = async (video) => {
+  try {
+    const filename = video.path.split('/').pop()
+    const res = await smartCutApi.deleteMergedVideo(filename)
+    if (res.code === 200) {
+      ElMessage.success('删除成功')
+      await fetchMergedVideos()
+    } else {
+      ElMessage.error(res.message || '删除失败')
+    }
+  } catch (error) {
+    ElMessage.error('删除失败: ' + (error.message || '未知错误'))
+  }
+}
+
+const openMergedDir = async () => {
+  try {
+    await functionsApi.openOutputDir()
+    ElMessage.success('输出目录已打开')
+  } catch (error) {
+    ElMessage.error('打开输出目录失败: ' + (error.message || '未知错误'))
+  }
+}
+
 onMounted(async () => {
   await fetchTasks()
+  await fetchMergedVideos()
   taskStore.startPolling()
 })
 
@@ -942,6 +1025,10 @@ onUnmounted(() => {
   grid-template-columns: repeat(6, 1fr);
   gap: 16px;
   margin-top: 16px;
+}
+
+.section-merged {
+  margin-top: 20px;
 }
 
 .completed-card {
