@@ -176,7 +176,7 @@ class DigitalHumanWorkflow:
         self.llm_generator = LLMScriptGenerator(
             provider=self.llm_config.get("provider", "deepseek"),
             api_key=self.llm_config.get("api_key", ""),
-            model=self.llm_config.get("model", "deepseek-v4-flash")
+            model=self.llm_config.get("model", "deepseek-v4-pro")
         )
         self.script_parser = create_script_parser()
         self.audio_processor = create_audio_processor(

@@ -203,7 +203,7 @@ def get_script_generator() -> LLMScriptGenerator:
     return create_script_generator(
         provider="deepseek",
         api_key=deepseek_api_key,
-        model="deepseek-v4-flash"
+        model="deepseek-v4-pro"
     )
 
 
