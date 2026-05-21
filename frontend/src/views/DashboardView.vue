@@ -105,86 +105,48 @@
 
       <div class="section-bottom">
         <div class="panel-header">
-          <h4><el-icon><CircleCheck /></el-icon> 已完成任务</h4>
-          <span class="count-badge completed">{{ completedTasks.length }}</span>
+          <h4><el-icon><CircleCheck /></el-icon> 已完成</h4>
+          <span class="count-badge completed">{{ allCompletedItems.length }}</span>
         </div>
-        <div class="completed-grid" v-if="completedTasks.length > 0">
-          <div 
-            v-for="task in completedTasks" 
-            :key="task.task_id"
+        <div class="completed-grid" v-if="allCompletedItems.length > 0">
+          <div
+            v-for="item in allCompletedItems"
+            :key="item._key"
             class="completed-card"
-            :class="{ 'has-error': task.status === 'failed' }"
+            :class="{ 'has-error': item._type === 'task' && item.status === 'failed' }"
           >
             <div class="card-thumbnail">
-              <video v-if="task.output_path && task.status !== 'failed'" :src="getVideoUrl(task.output_path)" muted @mouseenter="hoverVideo" @mouseleave="leaveVideo" />
+              <video v-if="item._videoPath" :src="getVideoUrl(item._videoPath)" muted @mouseenter="hoverVideo" @mouseleave="leaveVideo" />
               <div v-else class="error-placeholder">
                 <el-icon><Warning /></el-icon>
                 <span>生成失败</span>
               </div>
               <div class="card-overlay">
-                <el-button type="primary" circle @click="previewTask(task)">
+                <el-button type="primary" circle @click="previewItem(item)">
                   <el-icon><VideoPlay /></el-icon>
                 </el-button>
               </div>
             </div>
             <div class="card-info">
-              <span class="card-name">{{ task.name }}</span>
+              <span class="card-name">{{ item._name }}</span>
               <div class="card-meta">
-                <el-tag v-if="task.status === 'completed'" size="small" type="success">已完成</el-tag>
+                <el-tag v-if="item._type === 'merged'" size="small" type="info">合成</el-tag>
+                <el-tag v-else-if="item.status === 'completed'" size="small" type="success">已完成</el-tag>
                 <el-tag v-else size="small" type="danger">失败</el-tag>
-                <span class="card-time">{{ formatTime(task.completed_at || task.updated_at) }}</span>
+                <span class="card-time">{{ formatTime(item._time) }}</span>
               </div>
             </div>
             <div class="card-actions">
-              <el-button type="success" size="small" circle @click="downloadTask(task)" :disabled="!task.output_path">
+              <el-button type="success" size="small" circle @click="downloadItem(item)" :disabled="!item._videoPath">
                 <el-icon><Download /></el-icon>
               </el-button>
-              <el-button type="danger" size="small" circle @click="deleteTaskResult(task)">
+              <el-button type="danger" size="small" circle @click="deleteItem(item)">
                 <el-icon><Delete /></el-icon>
               </el-button>
             </div>
           </div>
         </div>
         <el-empty v-else description="暂无已完成任务" :image-size="80" />
-      </div>
-
-      <!-- 合成视频区域 -->
-      <div class="section-merged" v-if="mergedVideos.length > 0">
-        <div class="panel-header">
-          <h4><el-icon><Film /></el-icon> 合成视频</h4>
-          <span class="count-badge">{{ mergedVideos.length }}</span>
-        </div>
-        <div class="completed-grid">
-          <div
-            v-for="video in mergedVideos"
-            :key="video.path"
-            class="completed-card"
-          >
-            <div class="card-thumbnail">
-              <video :src="getVideoUrl(video.path)" muted @mouseenter="hoverVideo" @mouseleave="leaveVideo" />
-              <div class="card-overlay">
-                <el-button type="primary" circle @click="previewMerged(video)">
-                  <el-icon><VideoPlay /></el-icon>
-                </el-button>
-              </div>
-            </div>
-            <div class="card-info">
-              <span class="card-name">{{ video.name }}</span>
-              <div class="card-meta">
-                <el-tag size="small" type="info">合成</el-tag>
-                <span class="card-time">{{ formatTime(video.created_at) }}</span>
-              </div>
-            </div>
-            <div class="card-actions">
-              <el-button type="success" size="small" circle @click="openMergedDir">
-                <el-icon><Download /></el-icon>
-              </el-button>
-              <el-button type="danger" size="small" circle @click="deleteMergedVideo(video)">
-                <el-icon><Delete /></el-icon>
-              </el-button>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -253,9 +215,41 @@ const activeTasks = computed(() => {
   return [...running, ...queued]
 })
 
-const completedTasks = computed(() => 
+const completedTasks = computed(() =>
   allTasks.value.filter(t => t.status === 'completed' || t.status === 'failed')
 )
+
+// 合成视频
+const mergedVideos = ref([])
+
+// 合并后的已完成列表：任务 + 合成视频，按时间倒序
+const allCompletedItems = computed(() => {
+  const taskItems = completedTasks.value.map(task => ({
+    _key: task.task_id,
+    _type: 'task',
+    _name: task.name,
+    _videoPath: task.output_path && task.status !== 'failed' ? task.output_path : '',
+    _time: task.completed_at || task.updated_at,
+    status: task.status,
+    task_id: task.task_id,
+    output_path: task.output_path,
+  }))
+
+  const mergedItems = mergedVideos.value.map(video => ({
+    _key: video.path,
+    _type: 'merged',
+    _name: video.name,
+    _videoPath: video.path,
+    _time: video.created_at,
+    path: video.path,
+  }))
+
+  return [...taskItems, ...mergedItems].sort((a, b) => {
+    const timeA = a._time ? new Date(a._time).getTime() : 0
+    const timeB = b._time ? new Date(b._time).getTime() : 0
+    return timeB - timeA
+  })
+})
 
 const fetchTasks = async () => {
   try {
@@ -339,9 +333,9 @@ const deleteTask = async (task) => {
   }
 }
 
-const previewTask = (task) => {
-  if (task.output_path) {
-    previewUrl.value = getVideoUrl(task.output_path)
+const previewItem = (item) => {
+  if (item._videoPath) {
+    previewUrl.value = getVideoUrl(item._videoPath)
     showPreview.value = true
   }
 }
@@ -354,7 +348,7 @@ const closePreview = () => {
   previewUrl.value = ''
 }
 
-const downloadTask = async (task) => {
+const downloadItem = async (item) => {
   try {
     await functionsApi.openOutputDir()
     ElMessage.success('输出目录已打开')
@@ -363,11 +357,22 @@ const downloadTask = async (task) => {
   }
 }
 
-const deleteTaskResult = async (task) => {
+const deleteItem = async (item) => {
   try {
-    await taskApi.delete(task.task_id)
-    ElMessage.success('删除成功')
-    await fetchTasks()
+    if (item._type === 'merged') {
+      const filename = item.path.split('/').pop()
+      const res = await smartCutApi.deleteMergedVideo(filename)
+      if (res.code === 200) {
+        ElMessage.success('删除成功')
+        await fetchMergedVideos()
+      } else {
+        ElMessage.error(res.message || '删除失败')
+      }
+    } else {
+      await taskApi.delete(item.task_id)
+      ElMessage.success('删除成功')
+      await fetchTasks()
+    }
   } catch (error) {
     ElMessage.error('删除失败: ' + (error.response?.data?.detail || error.message || '未知错误'))
   }
@@ -400,9 +405,6 @@ const leaveVideo = (e) => {
   e.target.currentTime = 0
 }
 
-// 合成视频
-const mergedVideos = ref([])
-
 const fetchMergedVideos = async () => {
   try {
     const res = await smartCutApi.getMergedVideos()
@@ -411,35 +413,6 @@ const fetchMergedVideos = async () => {
     }
   } catch (error) {
     console.error('获取合成视频列表失败:', error)
-  }
-}
-
-const previewMerged = (video) => {
-  previewUrl.value = getVideoUrl(video.path)
-  showPreview.value = true
-}
-
-const deleteMergedVideo = async (video) => {
-  try {
-    const filename = video.path.split('/').pop()
-    const res = await smartCutApi.deleteMergedVideo(filename)
-    if (res.code === 200) {
-      ElMessage.success('删除成功')
-      await fetchMergedVideos()
-    } else {
-      ElMessage.error(res.message || '删除失败')
-    }
-  } catch (error) {
-    ElMessage.error('删除失败: ' + (error.message || '未知错误'))
-  }
-}
-
-const openMergedDir = async () => {
-  try {
-    await functionsApi.openOutputDir()
-    ElMessage.success('输出目录已打开')
-  } catch (error) {
-    ElMessage.error('打开输出目录失败: ' + (error.message || '未知错误'))
   }
 }
 
@@ -1025,10 +998,6 @@ onUnmounted(() => {
   grid-template-columns: repeat(6, 1fr);
   gap: 16px;
   margin-top: 16px;
-}
-
-.section-merged {
-  margin-top: 20px;
 }
 
 .completed-card {
