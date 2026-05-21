@@ -12,6 +12,7 @@ import platform
 import shutil
 import base64
 import asyncio
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime
@@ -19,6 +20,8 @@ import uuid
 
 import cv2
 import numpy as np
+
+from api.utils.async_subprocess import async_run_subprocess, async_run_ffprobe, async_run_ffmpeg
 
 # 添加 models 目录到路径
 models_path = Path(__file__).resolve().parent.parent.parent.parent / "models" / "TransNetV2"
@@ -69,9 +72,9 @@ class SmartCutService:
         ext = os.path.splitext(filename)[1].lower()
         return ext in self.SUPPORTED_FORMATS
 
-    def _get_video_info(self, video_path: str) -> Dict[str, Any]:
+    async def _get_video_info(self, video_path: str) -> Dict[str, Any]:
         """
-        使用 ffprobe 获取视频信息
+        使用 ffprobe 获取视频信息（异步，不阻塞事件循环）
 
         Args:
             video_path: 视频文件路径
@@ -80,24 +83,14 @@ class SmartCutService:
             包含 duration, fps, width, height, total_frames 的字典
         """
         try:
-            # 使用 ffprobe 获取视频信息
-            cmd = [
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=width,height,r_frame_rate,duration,nb_frames",
-                "-show_entries", "format=duration",
-                "-of", "json",
-                video_path
-            ]
+            data = await async_run_ffprobe(
+                video_path,
+                entries="stream=width,height,r_frame_rate,duration,nb_frames,format=duration",
+                output_format="json"
+            )
 
-            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=creationflags)
-
-            if result.returncode != 0:
-                logger.error(f"ffprobe 失败: {result.stderr}")
+            if not data:
                 return {}
-
-            data = json.loads(result.stdout)
 
             # 提取流信息
             stream = data.get("streams", [{}])[0] if data.get("streams") else {}
@@ -133,9 +126,9 @@ class SmartCutService:
             logger.error(f"获取视频信息失败: {e}")
             return {}
 
-    def _generate_thumbnail(self, video_path: str, output_path: str, time_offset: float = 0) -> bool:
+    async def _generate_thumbnail(self, video_path: str, output_path: str, time_offset: float = 0) -> bool:
         """
-        生成视频缩略图
+        生成视频缩略图（异步，不阻塞事件循环）
 
         Args:
             video_path: 视频文件路径
@@ -145,46 +138,43 @@ class SmartCutService:
         Returns:
             是否成功
         """
-        try:
-            # 使用 OpenCV 提取帧
-            cap = cv2.VideoCapture(video_path)
+        def _sync_generate():
+            try:
+                cap = cv2.VideoCapture(video_path)
+                if not cap.isOpened():
+                    return False
 
-            if not cap.isOpened():
-                logger.error(f"无法打开视频: {video_path}")
+                if time_offset > 0:
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    frame_number = int(time_offset * fps)
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+
+                ret, frame = cap.read()
+                cap.release()
+
+                if not ret or frame is None:
+                    return False
+
+                max_width = 320
+                if frame.shape[1] > max_width:
+                    scale = max_width / frame.shape[1]
+                    frame = cv2.resize(frame, None, fx=scale, fy=scale)
+
+                cv2.imwrite(output_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                return True
+            except Exception:
                 return False
 
-            # 设置帧位置
-            if time_offset > 0:
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                frame_number = int(time_offset * fps)
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-
-            ret, frame = cap.read()
-            cap.release()
-
-            if not ret or frame is None:
-                logger.error(f"无法读取视频帧: {video_path}")
-                return False
-
-            # 缩放到合适大小
-            max_width = 320
-            if frame.shape[1] > max_width:
-                scale = max_width / frame.shape[1]
-                frame = cv2.resize(frame, None, fx=scale, fy=scale)
-
-            # 保存缩略图
-            cv2.imwrite(output_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-
+        result = await asyncio.to_thread(_sync_generate)
+        if result:
             logger.info(f"缩略图生成成功: {output_path}")
-            return True
+        else:
+            logger.error(f"生成缩略图失败: {video_path}")
+        return result
 
-        except Exception as e:
-            logger.error(f"生成缩略图失败: {e}")
-            return False
-
-    def _generate_thumbnail_base64(self, video_path: str, time_offset: float = 0) -> Optional[str]:
+    async def _generate_thumbnail_base64(self, video_path: str, time_offset: float = 0) -> Optional[str]:
         """
-        生成视频缩略图的 base64 编码
+        生成视频缩略图的 base64 编码（异步，不阻塞事件循环）
 
         Args:
             video_path: 视频文件路径
@@ -193,38 +183,38 @@ class SmartCutService:
         Returns:
             base64 编码的图片（data:image/jpeg;base64,...）
         """
-        try:
-            cap = cv2.VideoCapture(video_path)
+        def _sync_generate():
+            try:
+                cap = cv2.VideoCapture(video_path)
+                if not cap.isOpened():
+                    return None
 
-            if not cap.isOpened():
+                if time_offset > 0:
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    frame_number = int(time_offset * fps)
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+
+                ret, frame = cap.read()
+                cap.release()
+
+                if not ret or frame is None:
+                    return None
+
+                max_width = 320
+                if frame.shape[1] > max_width:
+                    scale = max_width / frame.shape[1]
+                    frame = cv2.resize(frame, None, fx=scale, fy=scale)
+
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                frame_base64 = base64.b64encode(buffer).decode('utf-8')
+                return f"data:image/jpeg;base64,{frame_base64}"
+            except Exception:
                 return None
 
-            if time_offset > 0:
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                frame_number = int(time_offset * fps)
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-
-            ret, frame = cap.read()
-            cap.release()
-
-            if not ret or frame is None:
-                return None
-
-            # 缩放
-            max_width = 320
-            if frame.shape[1] > max_width:
-                scale = max_width / frame.shape[1]
-                frame = cv2.resize(frame, None, fx=scale, fy=scale)
-
-            # 编码为 base64
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            frame_base64 = base64.b64encode(buffer).decode('utf-8')
-
-            return f"data:image/jpeg;base64,{frame_base64}"
-
-        except Exception as e:
-            logger.error(f"生成缩略图 base64 失败: {e}")
-            return None
+        result = await asyncio.to_thread(_sync_generate)
+        if result is None:
+            logger.error(f"生成缩略图 base64 失败: {video_path}")
+        return result
 
     async def upload_video(
         self,
@@ -269,7 +259,7 @@ class SmartCutService:
 
         # 5. 获取视频信息
         try:
-            video_info = self._get_video_info(str(video_path))
+            video_info = await self._get_video_info(str(video_path))
         except Exception as e:
             # 清理临时文件
             shutil.rmtree(video_temp_dir, ignore_errors=True)
@@ -280,7 +270,7 @@ class SmartCutService:
             raise ValueError(f"视频文件损坏或无法读取")
 
         # 6. 生成缩略图（保存为文件，DB 存路径而非 base64）
-        thumbnail_base64 = self._generate_thumbnail_base64(str(video_path))
+        thumbnail_base64 = await self._generate_thumbnail_base64(str(video_path))
         thumbnail_path = video_temp_dir / "thumb.jpg"
         thumbnail_relative = ""
         if thumbnail_base64:
@@ -573,7 +563,7 @@ class SmartCutService:
 
         # 获取视频信息
         full_video_path = self.base_dir / video_path
-        video_info = self._get_video_info(str(full_video_path))
+        video_info = await self._get_video_info(str(full_video_path))
 
         if not video_info.get("duration"):
             raise ValueError("无法获取视频信息")
@@ -784,9 +774,9 @@ class SmartCutService:
             duration = end_time - start_time
 
             # 使用 FFmpeg 提取片段
-            if self._extract_segment(video_path, str(segment_path), start_time, duration):
+            if await self._extract_segment(video_path, str(segment_path), start_time, duration):
                 # 生成缩略图
-                self._generate_thumbnail(str(segment_path), str(thumbnail_path))
+                await self._generate_thumbnail(str(segment_path), str(thumbnail_path))
 
                 # 生成分段原因标签
                 reason_label = self._get_reason_label(reason)
@@ -843,15 +833,10 @@ class SmartCutService:
                 output_path
             ]
 
-            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                creationflags=creationflags
-            )
+            returncode, stdout, stderr = await async_run_ffmpeg(cmd)
 
-            if result.returncode != 0:
-                logger.error(f"FFmpeg 提取片段失败: {result.stderr.decode()}")
+            if returncode != 0:
+                logger.error(f"FFmpeg 提取片段失败: {stderr.decode() if stderr else ''}")
                 return False
 
             return True
@@ -904,19 +889,14 @@ class SmartCutService:
                 str(audio_path)
             ]
 
-            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                creationflags=creationflags
-            )
+            returncode, stdout, stderr = await async_run_ffmpeg(cmd)
 
-            if result.returncode != 0:
-                logger.error(f"FFmpeg 提取音频失败: {result.stderr.decode()}")
+            if returncode != 0:
+                logger.error(f"FFmpeg 提取音频失败: {stderr.decode() if stderr else ''}")
                 return None
 
             # 获取音频时长
-            duration = self._get_audio_duration(str(audio_path))
+            duration = await self._get_audio_duration(str(audio_path))
 
             logger.info(f"音频提取成功: {audio_path}")
 
@@ -930,23 +910,10 @@ class SmartCutService:
             logger.error(f"提取音频失败: {e}")
             return None
 
-    def _get_audio_duration(self, audio_path: str) -> float:
-        """获取音频时长"""
+    async def _get_audio_duration(self, audio_path: str) -> float:
+        """获取音频时长（异步，不阻塞事件循环）"""
         try:
-            cmd = [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "json",
-                audio_path
-            ]
-
-            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=creationflags)
-
-            if result.returncode != 0:
-                return 0.0
-
-            data = json.loads(result.stdout)
+            data = await async_run_ffprobe(audio_path, entries="format=duration")
             return float(data.get("format", {}).get("duration", 0))
 
         except Exception as e:
@@ -1006,16 +973,11 @@ class SmartCutService:
 
             # 检测片段实际宽高比，竖屏片段自动翻转输出分辨率
             try:
-                cmd_probe = [
-                    "ffprobe", "-v", "error",
-                    "-show_entries", "stream=width,height",
-                    "-of", "json",
-                    segment_files[0]
-                ]
-                creationflags_probe = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-                probe_result = subprocess.run(cmd_probe, capture_output=True, text=True, creationflags=creationflags_probe)
-                if probe_result.returncode == 0:
-                    probe_data = json.loads(probe_result.stdout)
+                probe_data = await async_run_ffprobe(
+                    segment_files[0],
+                    entries="stream=width,height"
+                )
+                if probe_data:
                     streams = probe_data.get("streams", [])
                     if streams:
                         src_w = int(streams[0].get("width", 0))
@@ -1026,19 +988,16 @@ class SmartCutService:
             except Exception as e:
                 logger.warning(f"检测片段分辨率失败: {e}")
 
-            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-
             # 根据转场效果选择合成方式
             if transition != "none" and len(segment_files) > 1:
                 # 使用 xfade 滤镜实现转场效果
-                result = self._merge_with_transition(
+                result = await self._merge_with_transition(
                     segment_files=segment_files,
                     output_path=str(output_path),
                     width=width,
                     height=height,
                     fps=fps,
-                    transition=transition,
-                    creationflags=creationflags
+                    transition=transition
                 )
                 if not result:
                     # 转场合成失败，回退到基础拼接
@@ -1047,13 +1006,12 @@ class SmartCutService:
 
             if transition == "none" or len(segment_files) == 1:
                 # 基础拼接（无转场）
-                result = self._merge_basic(
+                result = await self._merge_basic(
                     segment_files=segment_files,
                     output_path=str(output_path),
                     width=width,
                     height=height,
-                    fps=fps,
-                    creationflags=creationflags
+                    fps=fps
                 )
 
             if not result:
@@ -1081,9 +1039,9 @@ class SmartCutService:
                             '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
                             str(video_audio)
                         ]
-                        audio_result = subprocess.run(cmd_audio, capture_output=True, text=True, timeout=60, creationflags=creationflags)
+                        audio_rc, audio_out, audio_err = await async_run_ffmpeg(cmd_audio, timeout=60)
 
-                        if audio_result.returncode == 0 and video_audio.exists():
+                        if audio_rc == 0 and video_audio.exists():
                             # 混合BGM和原音频
                             mixed_audio = output_path.with_suffix('.mixed.wav')
                             cmd_mix = [
@@ -1095,9 +1053,9 @@ class SmartCutService:
                                 '-map', '[aout]', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
                                 str(mixed_audio)
                             ]
-                            mix_result = subprocess.run(cmd_mix, capture_output=True, text=True, timeout=60, creationflags=creationflags)
+                            mix_rc, mix_out, mix_err = await async_run_ffmpeg(cmd_mix, timeout=60)
 
-                            if mix_result.returncode == 0 and mixed_audio.exists():
+                            if mix_rc == 0 and mixed_audio.exists():
                                 # 用混合音频替换原视频音频
                                 final_output = output_path.with_name(output_path.stem + '_final.mp4')
                                 cmd_replace = [
@@ -1109,16 +1067,16 @@ class SmartCutService:
                                     '-shortest',
                                     str(final_output)
                                 ]
-                                replace_result = subprocess.run(cmd_replace, capture_output=True, text=True, timeout=120, creationflags=creationflags)
+                                replace_rc, replace_out, replace_err = await async_run_ffmpeg(cmd_replace, timeout=120)
 
-                                if replace_result.returncode == 0 and final_output.exists():
+                                if replace_rc == 0 and final_output.exists():
                                     output_path.unlink()
                                     final_output.rename(output_path)
                                     logger.info(f"BGM已混入合成视频: {output_path}")
                                 else:
-                                    logger.warning(f"替换音频失败: {replace_result.stderr}")
+                                    logger.warning(f"替换音频失败: {replace_err.decode() if replace_err else ''}")
                             else:
-                                logger.warning(f"混合音频失败: {mix_result.stderr}")
+                                logger.warning(f"混合音频失败: {mix_err.decode() if mix_err else ''}")
 
                             video_audio.unlink(missing_ok=True)
                             mixed_audio.unlink(missing_ok=True)
@@ -1135,14 +1093,14 @@ class SmartCutService:
                                 '-shortest',
                                 str(final_output)
                             ]
-                            add_bgm_result = subprocess.run(cmd_add_bgm, capture_output=True, text=True, timeout=120, creationflags=creationflags)
+                            add_bgm_rc, add_bgm_out, add_bgm_err = await async_run_ffmpeg(cmd_add_bgm, timeout=120)
 
-                            if add_bgm_result.returncode == 0 and final_output.exists():
+                            if add_bgm_rc == 0 and final_output.exists():
                                 output_path.unlink()
                                 final_output.rename(output_path)
                                 logger.info(f"BGM已作为唯一音频添加到合成视频: {output_path}")
                             else:
-                                logger.warning(f"添加BGM失败: {add_bgm_result.stderr}")
+                                logger.warning(f"添加BGM失败: {add_bgm_err.decode() if add_bgm_err else ''}")
                     else:
                         logger.warning(f"BGM文件不存在: {bgm_path}")
                 except Exception as e:
@@ -1150,7 +1108,7 @@ class SmartCutService:
 
             # 获取输出文件信息
             file_size = output_path.stat().st_size
-            duration = self._get_video_duration(str(output_path))
+            duration = await self._get_video_duration(str(output_path))
 
             logger.info(f"视频合成成功: {output_path}")
 
@@ -1197,10 +1155,10 @@ class SmartCutService:
                 output_path
             ]
 
-            result = subprocess.run(cmd, capture_output=True, creationflags=creationflags)
+            returncode, stdout, stderr = await async_run_ffmpeg(cmd)
 
-            if result.returncode != 0:
-                logger.error(f"FFmpeg 基础合成失败: {result.stderr.decode()}")
+            if returncode != 0:
+                logger.error(f"FFmpeg 基础合成失败: {stderr.decode() if stderr else ''}")
                 return False
 
             return True
@@ -1231,7 +1189,7 @@ class SmartCutService:
             # 获取每个片段的时长
             durations = []
             for seg_file in segment_files:
-                duration = self._get_video_duration(seg_file)
+                duration = await self._get_video_duration(seg_file)
                 durations.append(duration)
 
             if len(durations) < 2:
@@ -1285,10 +1243,10 @@ class SmartCutService:
                 output_path
             ])
 
-            result = subprocess.run(cmd, capture_output=True, creationflags=creationflags)
+            returncode, stdout, stderr = await async_run_ffmpeg(cmd)
 
-            if result.returncode != 0:
-                logger.error(f"FFmpeg 转场合成失败: {result.stderr.decode()}")
+            if returncode != 0:
+                logger.error(f"FFmpeg 转场合成失败: {stderr.decode() if stderr else ''}")
                 return False
 
             return True
@@ -1297,25 +1255,11 @@ class SmartCutService:
             logger.error(f"转场合成异常: {e}")
             return False
 
-    def _get_video_duration(self, video_path: str) -> float:
-        """获取视频时长"""
+    async def _get_video_duration(self, video_path: str) -> float:
+        """获取视频时长（异步，不阻塞事件循环）"""
         try:
-            cmd = [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "json",
-                video_path
-            ]
-
-            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-            result = subprocess.run(cmd, capture_output=True, text=True, creationflags=creationflags)
-
-            if result.returncode != 0:
-                return 0.0
-
-            data = json.loads(result.stdout)
+            data = await async_run_ffprobe(video_path, entries="format=duration")
             return float(data.get("format", {}).get("duration", 0))
-
         except Exception as e:
             logger.error(f"获取视频时长失败: {e}")
             return 0.0

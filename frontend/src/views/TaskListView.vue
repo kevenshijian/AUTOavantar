@@ -44,7 +44,7 @@
     <el-card class="list-card" shadow="never">
       <el-table 
         :data="filteredTasks" 
-        v-loading="loading"
+        v-loading="taskStore.isFetchingList"
         style="width: 100%"
         @selection-change="handleSelectionChange"
       >
@@ -189,7 +189,6 @@ import websocketService from '@/services/websocket'
 const router = useRouter()
 const taskStore = useTaskStore()
 
-const loading = ref(false)
 const selectedTasks = ref([])
 const unsubscribeCallbacks = ref([])
 
@@ -469,15 +468,12 @@ const cleanupWebSocket = () => {
 }
 
 onMounted(async () => {
-  loading.value = true
   try {
     await taskStore.fetchTasks()
     setupWebSocketListeners()
     await connectToRunningTasks()
   } catch (error) {
     ElMessage.error('加载任务列表失败')
-  } finally {
-    loading.value = false
   }
 })
 

@@ -9,11 +9,14 @@ export const useMaterialStore = defineStore('material', {
       audios: [],
       bgm: []
     },
-    isLoading: false,
+    isLoadingMaterials: false,
+    isUploading: false,
+    isDeleting: false,
     error: null
   }),
 
   getters: {
+    isLoading: (state) => state.isLoadingMaterials || state.isUploading || state.isDeleting,
     allMaterials: (state) => {
       return [
         ...state.materials.roles,
@@ -33,7 +36,7 @@ export const useMaterialStore = defineStore('material', {
      * 加载所有素材
      */
     async loadMaterials() {
-      this.isLoading = true
+      this.isLoadingMaterials = true
       this.error = null
       
       try {
@@ -82,7 +85,7 @@ export const useMaterialStore = defineStore('material', {
         this.error = error.message
         console.error('加载素材失败:', error)
       } finally {
-        this.isLoading = false
+        this.isLoadingMaterials = false
       }
     },
 
@@ -90,9 +93,9 @@ export const useMaterialStore = defineStore('material', {
      * 获取素材详情
      */
     async fetchMaterial(materialId) {
-      this.isLoading = true
+      this.isLoadingMaterials = true
       this.error = null
-      
+
       try {
         const response = await materialApi.getMaterial(materialId)
         return response
@@ -100,7 +103,7 @@ export const useMaterialStore = defineStore('material', {
         this.error = error.message
         throw error
       } finally {
-        this.isLoading = false
+        this.isLoadingMaterials = false
       }
     },
 
@@ -108,9 +111,9 @@ export const useMaterialStore = defineStore('material', {
      * 上传素材
      */
     async uploadMaterial(formData) {
-      this.isLoading = true
+      this.isUploading = true
       this.error = null
-      
+
       try {
         const response = await materialApi.uploadMaterial(formData)
         // 刷新素材列表
@@ -120,7 +123,7 @@ export const useMaterialStore = defineStore('material', {
         this.error = error.message
         throw error
       } finally {
-        this.isLoading = false
+        this.isUploading = false
       }
     },
 
@@ -128,9 +131,9 @@ export const useMaterialStore = defineStore('material', {
      * 删除素材
      */
     async deleteMaterial(materialId, type = 'audio') {
-      this.isLoading = true
+      this.isDeleting = true
       this.error = null
-      
+
       try {
         await materialApi.delete(materialId, type)
         // 刷新素材列表
@@ -139,7 +142,7 @@ export const useMaterialStore = defineStore('material', {
         this.error = error.message
         throw error
       } finally {
-        this.isLoading = false
+        this.isDeleting = false
       }
     },
 

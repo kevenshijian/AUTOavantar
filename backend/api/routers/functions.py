@@ -17,6 +17,8 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 import subprocess
 
+from api.utils.async_subprocess import async_run_subprocess, async_run_ffprobe, async_run_ffmpeg
+
 from config.settings import settings
 from business.preprocess.video_preprocessor import VideoPreprocessor
 from business.audio.gtcrn_denoiser import GTCDenoiser
@@ -661,7 +663,7 @@ async def extract_audio(request: ExtractAudioRequest):
             "-ar", "16000", "-ac", "1",
             "-y", audio_path
         ]
-        subprocess.run(cmd, capture_output=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
+        await async_run_ffmpeg(cmd, timeout=120)
 
         duration = 0.0
         probe_cmd = [
@@ -671,8 +673,9 @@ async def extract_audio(request: ExtractAudioRequest):
             audio_path
         ]
         try:
-            result = subprocess.run(probe_cmd, capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
-            duration = float(result.stdout.strip())
+            returncode, stdout, stderr = await async_run_subprocess(probe_cmd)
+            if returncode == 0 and stdout:
+                duration = float(stdout.decode().strip())
         except:
             pass
 
@@ -1106,11 +1109,11 @@ async def open_output_dir():
 
     try:
         if platform.system() == "Windows":
-            subprocess.run(["explorer", output_dir_absolute], check=False)
+            await async_run_subprocess(["explorer", output_dir_absolute])
         elif platform.system() == "Darwin":  # macOS
-            subprocess.run(["open", output_dir_absolute], check=False)
+            await async_run_subprocess(["open", output_dir_absolute])
         else:  # Linux
-            subprocess.run(["xdg-open", output_dir_absolute], check=False)
+            await async_run_subprocess(["xdg-open", output_dir_absolute])
 
         logger.info(f"打开输出目录: {output_dir_absolute}")
         return {

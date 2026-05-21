@@ -6,7 +6,14 @@ export const useTaskStore = defineStore('tasks', {
   state: () => ({
     tasks: [],
     currentTask: null,
-    isLoading: false,
+    isFetchingList: false,
+    isCreating: false,
+    isFetchingDetail: false,
+    isDeleting: false,
+    isGeneratingScript: false,
+    isExtractingAudio: false,
+    isDenoising: false,
+    isAnalyzingFace: false,
     error: null,
     pollingTimer: null,
     pollingInterval: 3000,
@@ -16,6 +23,7 @@ export const useTaskStore = defineStore('tasks', {
   }),
 
   getters: {
+    isLoading: (state) => state.isFetchingList || state.isCreating || state.isFetchingDetail || state.isDeleting || state.isGeneratingScript || state.isExtractingAudio || state.isDenoising || state.isAnalyzingFace,
     pendingTasks: (state) => (Array.isArray(state.tasks) ? state.tasks.filter(t => t.status === 'pending') : []),
     processingTasks: (state) => (Array.isArray(state.tasks) ? state.tasks.filter(t => t.status === 'processing') : []),
     completedTasks: (state) => (Array.isArray(state.tasks) ? state.tasks.filter(t => t.status === 'completed') : []),
@@ -30,9 +38,9 @@ export const useTaskStore = defineStore('tasks', {
      * 创建新任务
      */
     async createTask(taskData) {
-      this.isLoading = true
+      this.isCreating = true
       this.error = null
-      
+
       try {
         const apiResponse = await taskApi.createTask(taskData)
         const taskResult = apiResponse.data || apiResponse
@@ -44,7 +52,7 @@ export const useTaskStore = defineStore('tasks', {
         this.error = error.message
         throw error
       } finally {
-        this.isLoading = false
+        this.isCreating = false
       }
     },
 
@@ -52,9 +60,9 @@ export const useTaskStore = defineStore('tasks', {
      * 获取所有任务
      */
     async fetchTasks() {
-      this.isLoading = true
+      this.isFetchingList = true
       this.error = null
-      
+
       try {
         const apiResponse = await taskApi.getTasks()
         this.tasks = (apiResponse.data && apiResponse.data.items) || (apiResponse.data || [])
@@ -62,7 +70,7 @@ export const useTaskStore = defineStore('tasks', {
         this.error = error.message
         this.tasks = []
       } finally {
-        this.isLoading = false
+        this.isFetchingList = false
       }
     },
 
@@ -70,24 +78,24 @@ export const useTaskStore = defineStore('tasks', {
      * 获取单个任务详情
      */
     async fetchTask(taskId) {
-      this.isLoading = true
+      this.isFetchingDetail = true
       this.error = null
-      
+
       try {
         const response = await taskApi.getTask(taskId)
         this.currentTask = response
-        
+
         const index = this.tasks.findIndex(t => t.task_id === taskId)
         if (index !== -1) {
           this.tasks[index] = response
         }
-        
+
         return response
       } catch (error) {
         this.error = error.message
         throw error
       } finally {
-        this.isLoading = false
+        this.isFetchingDetail = false
       }
     },
 
@@ -176,13 +184,13 @@ export const useTaskStore = defineStore('tasks', {
      * 删除任务
      */
     async deleteTask(taskId) {
-      this.isLoading = true
+      this.isDeleting = true
       this.error = null
-      
+
       try {
         await taskApi.deleteTask(taskId)
         this.tasks = this.tasks.filter(t => t.task_id !== taskId)
-        
+
         if (this.currentTask?.task_id === taskId) {
           this.currentTask = null
         }
@@ -190,7 +198,7 @@ export const useTaskStore = defineStore('tasks', {
         this.error = error.message
         throw error
       } finally {
-        this.isLoading = false
+        this.isDeleting = false
       }
     },
 
@@ -205,9 +213,9 @@ export const useTaskStore = defineStore('tasks', {
      * 生成文案
      */
     async generateScript({ topic, prompt, mode }) {
-      this.isLoading = true
+      this.isGeneratingScript = true
       this.error = null
-      
+
       try {
         const response = await taskApi.generateScript({ topic, prompt, mode })
         return response
@@ -215,7 +223,7 @@ export const useTaskStore = defineStore('tasks', {
         this.error = error.message
         throw error
       } finally {
-        this.isLoading = false
+        this.isGeneratingScript = false
       }
     },
 
@@ -223,9 +231,9 @@ export const useTaskStore = defineStore('tasks', {
      * 从视频中提取音频
      */
     async extractAudio(videoPath) {
-      this.isLoading = true
+      this.isExtractingAudio = true
       this.error = null
-      
+
       try {
         const response = await taskApi.extractAudio(videoPath)
         return response
@@ -233,7 +241,7 @@ export const useTaskStore = defineStore('tasks', {
         this.error = error.message
         throw error
       } finally {
-        this.isLoading = false
+        this.isExtractingAudio = false
       }
     },
 
@@ -241,9 +249,9 @@ export const useTaskStore = defineStore('tasks', {
      * 音频降噪
      */
     async denoiseAudio(audioId) {
-      this.isLoading = true
+      this.isDenoising = true
       this.error = null
-      
+
       try {
         const response = await taskApi.denoiseAudio(audioId)
         return response
@@ -251,7 +259,7 @@ export const useTaskStore = defineStore('tasks', {
         this.error = error.message
         throw error
       } finally {
-        this.isLoading = false
+        this.isDenoising = false
       }
     },
 
@@ -260,9 +268,9 @@ export const useTaskStore = defineStore('tasks', {
      */
     async analyzeFace(videoId) {
       console.log('开始面部分析，视频ID:', videoId)
-      this.isLoading = true
+      this.isAnalyzingFace = true
       this.error = null
-      
+
       try {
         const response = await taskApi.analyzeFace(videoId)
         console.log('面部分析成功，响应:', response)
@@ -272,8 +280,8 @@ export const useTaskStore = defineStore('tasks', {
         this.error = error.message
         throw error
       } finally {
-        this.isLoading = false
-        console.log('面部分析结束，isLoading重置为false')
+        this.isAnalyzingFace = false
+        console.log('面部分析结束，isAnalyzingFace重置为false')
       }
     },
 

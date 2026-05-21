@@ -223,6 +223,7 @@ const completedTasks = computed(() =>
 const mergedVideos = ref([])
 
 // 合并后的已完成列表：任务 + 合成视频，按时间倒序
+// 去重：主流程输出也保存在 output 目录，mergedVideos 会扫描到它，需排除
 const allCompletedItems = computed(() => {
   const taskItems = completedTasks.value.map(task => ({
     _key: task.task_id,
@@ -235,14 +236,23 @@ const allCompletedItems = computed(() => {
     output_path: task.output_path,
   }))
 
-  const mergedItems = mergedVideos.value.map(video => ({
-    _key: video.path,
-    _type: 'merged',
-    _name: video.name,
-    _videoPath: video.path,
-    _time: video.created_at,
-    path: video.path,
-  }))
+  // 收集已完成任务的 output_path，用于去重
+  const taskOutputPaths = new Set(
+    completedTasks.value
+      .filter(t => t.output_path && t.status !== 'failed')
+      .map(t => t.output_path.replace(/\\/g, '/'))
+  )
+
+  const mergedItems = mergedVideos.value
+    .filter(video => !taskOutputPaths.has(video.path.replace(/\\/g, '/')))
+    .map(video => ({
+      _key: video.path,
+      _type: 'merged',
+      _name: video.name,
+      _videoPath: video.path,
+      _time: video.created_at,
+      path: video.path,
+    }))
 
   return [...taskItems, ...mergedItems].sort((a, b) => {
     const timeA = a._time ? new Date(a._time).getTime() : 0
